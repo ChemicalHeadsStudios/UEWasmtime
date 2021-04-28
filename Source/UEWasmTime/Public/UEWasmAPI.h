@@ -4,6 +4,31 @@ THIRD_PARTY_INCLUDES_START
 #include "wasmtime.h"
 THIRD_PARTY_INCLUDES_END
 
+
+#define DECLARE_CUSTOM_WASMTYPE(Name, WasmType, DeleterFunction) \
+struct T##Name##CustomDeleter : TDefaultDelete<WasmType> \
+{\
+	bool bDontDelete;\
+	T##Name##CustomDeleter() = default;\
+	T##Name##CustomDeleter(bool bInDontDelete)\
+	{\
+		bDontDelete = bInDontDelete;\
+	}\
+ 	void operator()(WasmType* Ptr) const\
+	{\
+		if (Ptr)\
+		{\
+			if(!bDontDelete)\
+			{\
+				DeleterFunction(Ptr);\
+			}\
+			Ptr = nullptr;\
+		}\
+	}\
+};\
+typedef TUniquePtr<WasmType, T##Name##CustomDeleter> T##Name
+	
+
 FORCEINLINE void PrintError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer)
 {
 	wasm_byte_vec_t ErrorMessage = {0, nullptr};
@@ -86,8 +111,9 @@ namespace UEWasm
 	template <typename T>
 	struct TWasmGenericDeleter : TDefaultDelete<T>
 	{
+		
 		TFunction<void(T*)> CustomDeleter;
-
+		
 		TWasmGenericDeleter(TFunction<void(T*)>&& InCustomDeleter)
 		{
 			CustomDeleter = MoveTemp(InCustomDeleter);
@@ -105,17 +131,41 @@ namespace UEWasm
 	};
 
 
-	typedef TUniquePtr<wasm_store_t, TWasmGenericDeleter<wasm_store_t>> TWasmStore;
-	typedef TUniquePtr<wasm_instance_t, TWasmGenericDeleter<wasm_instance_t>> TWasmInstance;
-	typedef TUniquePtr<wasm_engine_t, TWasmGenericDeleter<wasm_engine_t>> TWasmEngine;
-	typedef TUniquePtr<wasm_module_t, TWasmGenericDeleter<wasm_module_t>> TWasmModule;
-
+	DECLARE_CUSTOM_WASMTYPE(WasmConfig, wasm_config_t, wasm_config_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmStore, wasm_store_t, wasm_store_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmInstance, wasm_instance_t, wasm_instance_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmEngine, wasm_engine_t, wasm_engine_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmModule, wasm_module_t, wasm_module_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmFuncType, wasm_functype_t, wasm_functype_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmFunc, wasm_func_t, wasm_func_delete);
+	
 	typedef TUniquePtr<TWasmRef<wasm_byte_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>> TWasmVec;
 	typedef TUniquePtr<TWasmRef<wasm_extern_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>> TWasmExternVec;
 	typedef TUniquePtr<TWasmRef<wasm_valtype_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_valtype_vec_t>>> TWasmValTypeVec;
 
-	typedef TUniquePtr<wasm_functype_t, TWasmGenericDeleter<wasm_functype_t>> TWasmFuncType;
-	typedef TUniquePtr<wasm_func_t, TWasmGenericDeleter<wasm_func_t>> TWasmFunc;
+	typedef wasm_extern_t* TWasmExtern;
+
+	FORCEINLINE TWasmExternVec WasmGetInstanceInstanceExports(const TWasmInstance& Instance)
+	{
+		check(Instance.Get());
+		auto ExternVec = new TWasmRef<wasm_extern_vec_t>();
+		wasm_instance_exports(Instance.Get(), &ExternVec->Value);
+		return TWasmExternVec(ExternVec, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>([](TWasmRef<wasm_extern_vec_t>* ExternVec)
+		{
+			wasm_extern_vec_delete(&ExternVec->Value);
+			delete ExternVec;
+		}));
+	}
+	
+	FORCEINLINE TWasmExtern WasmFromFunction(const TWasmFunc& Func)
+	{
+		return wasm_func_as_extern(Func.Get());
+	}
+
+	FORCEINLINE TWasmFunc WasmToFunction(const TWasmExtern& Extern)
+	{
+		return TWasmFunc(wasm_extern_as_func(Extern), TWasmFuncCustomDeleter(true));
+	}
 
 	FORCEINLINE TWasmFunc MakeWasmFunc(const TWasmStore& WasmStore, const TWasmFuncType& WasmFunctype,
 	                                   wasm_func_callback_t FunctionCallback)
@@ -123,11 +173,7 @@ namespace UEWasm
 		check(FunctionCallback);
 		check(WasmFunctype.Get())
 		check(WasmStore.Get());
-		return TWasmFunc(wasm_func_new(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback), TWasmGenericDeleter<wasm_func_t>(
-			                 [](wasm_func_t* Func)
-			                 {
-				                 wasm_func_delete(Func);
-			                 }));
+		return TWasmFunc(wasm_func_new(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback));
 	}
 
 	FORCEINLINE TWasmValTypeVec CopyWasmValTypeVec(const TWasmValTypeVec& In, bool bDontDelete = false)
@@ -195,10 +241,7 @@ namespace UEWasm
 		wasm_valtype_vec_t ParamsVec = Params.Get()->Value;
 		wasm_valtype_vec_t ResultsVec = Results.Get()->Value;
 
-		return TWasmFuncType(wasm_functype_new(&ParamsVec, &ResultsVec), TWasmGenericDeleter<wasm_functype_t>([](wasm_functype_t* FuncType)
-		{
-			wasm_functype_delete(FuncType);
-		}));
+		return TWasmFuncType(wasm_functype_new(&ParamsVec, &ResultsVec));
 	}
 
 	FORCEINLINE TOptional<TWasmInstance> MakeWasmInstance(const TWasmStore& Store, const TWasmModule& Module,
@@ -214,11 +257,7 @@ namespace UEWasm
 		wasm_instance_t* WasmInstance = wasm_instance_new(Store.Get(), Module.Get(), &ExternVec.Get()->Value, &Trap);
 		if (WasmInstance)
 		{
-			TWasmInstance Instance = TWasmInstance(WasmInstance, TWasmGenericDeleter<wasm_instance_t>(
-				                                       [](wasm_instance_t* Instance)
-				                                       {
-					                                       wasm_instance_delete((wasm_instance_t*)Instance);
-				                                       }));
+			TWasmInstance Instance = TWasmInstance(WasmInstance);
 
 			OptionalWasmInstance = MoveTemp(Instance);
 		}
@@ -232,28 +271,29 @@ namespace UEWasm
 	FORCEINLINE TWasmStore MakeWasmStore(const TWasmEngine& Engine)
 	{
 		check(Engine.Get());
-		return TWasmStore(wasm_store_new(Engine.Get()), TWasmGenericDeleter<wasm_store_t>([](wasm_store_t* StoreHandle)
-		{
-			wasm_store_delete(StoreHandle);
-		}));
+		return TWasmStore(wasm_store_new(Engine.Get()));
 	}
 
 	FORCEINLINE TWasmEngine MakeWasmEngine()
 	{
-		return TWasmEngine(wasm_engine_new(), TWasmGenericDeleter<wasm_engine_t>([](wasm_engine_t* EngineHandle)
-		{
-			wasm_engine_delete(EngineHandle);
-		}));
+		return TWasmEngine(wasm_engine_new());
+	}
+
+	FORCEINLINE TWasmConfig MakeWasmConfig()
+	{
+		return TWasmConfig(wasm_config_new());
+	}
+
+	FORCEINLINE TWasmEngine MakeWasmEngine(const TWasmConfig& Config)
+	{
+		check(Config.Get());
+		return TWasmEngine(wasm_engine_new_with_config(Config.Get()));
 	}
 
 	FORCEINLINE TWasmModule MakeWasmModule(const TWasmStore& Store, const TWasmVec& Binary)
 	{
 		check(Store.Get());
 		check(Binary.Get());
-		return TWasmModule(wasm_module_new(Store.Get(), &Binary.Get()->Value), TWasmGenericDeleter<wasm_module_t>(
-			                   [](wasm_module_t* ModuleHandle)
-			                   {
-				                   wasm_module_delete(ModuleHandle);
-			                   }));
+		return TWasmModule(wasm_module_new(Store.Get(), &Binary.Get()->Value));
 	}
 }

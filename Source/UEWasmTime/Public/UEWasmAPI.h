@@ -89,7 +89,7 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 	if (ErrorMessage.data != nullptr)
 	{
 		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
-		UE_LOG(LogEngine, Error, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		UE_LOG(LogEngine, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
 		return false;
@@ -97,54 +97,64 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 	return true;
 }
 
+/**
+ * UEWasm smart pointer and utility library.
+ */
 namespace UEWas
 {
 	template <typename T>
 	struct TWasmValue
 	{
-		static wasm_val_t GetType()
-		{
-			static_assert(!sizeof(T), "Variant trait must be specialized for this type.");
-			wasm_val_t WasmValue;
-			WasmValue.kind = WASM_I32;
-			WasmValue.of.i32 = 0;
-			return WasmValue;
-		}
 	};
 
 	template <>
 	struct TWasmValue<int32_t>
 	{
-		static wasm_val_t WASM_NEW_VAL(int32_t InValue)
+		static wasm_val_t NewValue(int32_t InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_I32;
 			WasmValue.of.i32 = InValue;
 			return WasmValue;
 		}
+
+		static wasm_valtype_t* GetType()
+		{
+			return wasm_valtype_new_i32();
+		}
 	};
 
 	template <>
 	struct TWasmValue<int64_t>
 	{
-		static wasm_val_t WASM_NEW_VAL(int64_t InValue)
+		static wasm_val_t NewValue(int64_t InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_I64;
 			WasmValue.of.i64 = InValue;
 			return WasmValue;
 		}
+		
+		static wasm_valtype_t* GetType()
+		{
+			return wasm_valtype_new_i64();
+		}
 	};
 
 	template <>
 	struct TWasmValue<wasm_ref_t*>
 	{
-		static wasm_val_t WASM_NEW_VAL(wasm_ref_t* InValue)
+		static wasm_val_t NewValue(wasm_ref_t* InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_ANYREF;
 			WasmValue.of.ref = InValue;
 			return WasmValue;
+		}
+		
+		static wasm_valtype_t* GetType()
+		{
+			return wasm_valtype_new_anyref();
 		}
 	};
 
@@ -163,6 +173,7 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE_VEC(WasmByteVec, wasm_byte_vec_t, wasm_byte_t, wasm_byte_vec_new, wasm_byte_vec_delete);
 	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmExternVec, wasm_extern_vec_t, wasm_extern_t, wasm_extern_vec_new, wasm_extern_vec_delete);
 	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_t, wasm_valtype_vec_new, wasm_valtype_vec_delete);
+
 	DECLARE_CUSTOM_WASMTYPE_VEC(WasmValVec, wasm_val_vec_t, wasm_val_t, wasm_val_vec_new, wasm_val_vec_delete);
 
 	
@@ -209,15 +220,6 @@ namespace UEWas
 		return TWasmFunc(wasm_func_new(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback));
 	}
 
-	FORCEINLINE TWasmValTypeVec CopyWasmValTypeVec(const TWasmValTypeVec& In, bool bDontDelete = false)
-	{
-		check(In.Get());
-
-		auto Out = new TWasmRef<wasm_valtype_vec_t>();
-		wasm_valtype_vec_copy(&Out->Value, &In.Get()->Value);
-		return TWasmValTypeVec(Out, TWasmValTypeVecCustomDeleter(bDontDelete));
-	}
-
 	template <typename VecArrayType = TWasmByteVec>
 	FORCEINLINE VecArrayType MakeWasmVecConst(typename VecArrayType::StaticElementType* const* Data, const uint32& Num, bool bDontDelete = false)
 	{
@@ -246,15 +248,9 @@ namespace UEWas
 		return VecArrayType(Vec, typename VecArrayType::StaticWasmDeleter(bDontDelete));
 	}
 
-	FORCEINLINE TWasmFuncType MakeWasmFuncType(const TWasmValTypeVec& Params, const TWasmValTypeVec& Results)
+	FORCEINLINE TWasmFuncType MakeWasmFuncType(TWasmValTypeVec&& Params, TWasmValTypeVec&& Results)
 	{
-		check(Params.Get());
-		check(Results.Get());
-
-		wasm_valtype_vec_t ParamsVec = Params.Get()->Value;
-		wasm_valtype_vec_t ResultsVec = Results.Get()->Value;
-
-		return TWasmFuncType(wasm_functype_new(&ParamsVec, &ResultsVec));
+		return TWasmFuncType(wasm_functype_new(&Params.Get()->Value, &Results.Get()->Value));
 	}
 
 
@@ -268,7 +264,7 @@ namespace UEWas
 		return Linker;
 	}
 
-	FORCEINLINE TWasiInstance MakeWasiInstance(const TWasmStore& Store, TWasiConfig& Config)
+	FORCEINLINE TWasiInstance MakeWasiInstance(const TWasmStore& Store, TWasiConfig&& Config)
 	{
 		wasm_trap_t* Trap;
 		wasi_instance_t* WasiInstance = wasi_instance_new(Store.Get(), "wasi_snapshot_preview1", Config.Release(), &Trap);
@@ -280,22 +276,17 @@ namespace UEWas
 		return TWasiInstance(WasiInstance);
 	}
 
-	FORCEINLINE TWasmInstance MakeWasmInstance(const TWasmStore& Store, const TWasmModule& Module, const TWasmLinker& Linker)
+	FORCEINLINE TWasmInstance MakeWasmInstance(const TWasmModule& Module, const TWasmLinker& Linker)
 	{
-		check(Store.Get());
 		check(Module.Get());
 		check(Linker.Get());
 
-		wasm_instance_t* Instance;
+		wasm_instance_t* RawInstance;
 		wasm_trap_t* Trap;
-		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &Instance, &Trap);
-		if (!Instance)
-		{
-			HandleError(TEXT("New Instance"), Error, Trap);
-			Instance = nullptr;
-		} 
-
-		return TWasmInstance(Instance);
+		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
+		TWasmInstance WasmInstance = TWasmInstance(RawInstance);
+		HandleError(TEXT("New Instance"), Error, nullptr);
+		return WasmInstance;
 	}
 
 	FORCEINLINE TWasmStore MakeWasmStore(const TWasmEngine& Engine)

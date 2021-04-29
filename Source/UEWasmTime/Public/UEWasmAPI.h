@@ -47,11 +47,12 @@ FORCEINLINE void PrintError(const FString& Caller, wasmtime_error_t* ErrorPointe
 	{
 		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
 		UE_LOG(LogBadLadsPlugin, Error, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
 	}
 }
 
-namespace UEWasm
+namespace UEWas
 {
 	template <typename T>
 	struct TWasmValue
@@ -131,20 +132,40 @@ namespace UEWasm
 	};
 
 
-	DECLARE_CUSTOM_WASMTYPE(WasmConfig, wasm_config_t, wasm_config_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasiConfig, wasi_config_t, wasi_config_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasiInstance, wasi_instance_t, wasi_instance_delete);
+
 	DECLARE_CUSTOM_WASMTYPE(WasmStore, wasm_store_t, wasm_store_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmInstance, wasm_instance_t, wasm_instance_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmEngine, wasm_engine_t, wasm_engine_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmModule, wasm_module_t, wasm_module_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmFuncType, wasm_functype_t, wasm_functype_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmFunc, wasm_func_t, wasm_func_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmLinker, wasmtime_linker_t, wasmtime_linker_delete);
 	
-	typedef TUniquePtr<TWasmRef<wasm_byte_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>> TWasmVec;
+	typedef TUniquePtr<TWasmRef<wasm_byte_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>> TWasmByteVec;
 	typedef TUniquePtr<TWasmRef<wasm_extern_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>> TWasmExternVec;
 	typedef TUniquePtr<TWasmRef<wasm_valtype_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_valtype_vec_t>>> TWasmValTypeVec;
-
 	typedef wasm_extern_t* TWasmExtern;
+	typedef TWasmByteVec TWasmName;
 
+	FORCEINLINE TWasmName MakeWasmName(const FString& InString)
+	{
+		auto NamePtr = new TWasmRef<wasm_name_t>();
+		if(!InString.IsEmpty())
+		{
+			wasm_name_new_from_string(&NamePtr->Value, TCHAR_TO_UTF8(*InString));
+		} else
+		{
+			wasm_name_new_empty(&NamePtr->Value);
+		}
+		return TWasmName(NamePtr, TWasmGenericDeleter<TWasmRef<wasm_name_t>>([](TWasmRef<wasm_name_t>* VecHandle)
+		{
+			wasm_name_delete(&VecHandle->Value);
+			delete VecHandle;
+		}));
+	};
+	
 	FORCEINLINE TWasmExternVec WasmGetInstanceInstanceExports(const TWasmInstance& Instance)
 	{
 		check(Instance.Get());
@@ -220,12 +241,12 @@ namespace UEWasm
 		}));
 	}
 
-	FORCEINLINE TWasmVec MakeWasmVec(uint8* Data, const uint32& Num)
+	FORCEINLINE TWasmByteVec MakeWasmVec(uint8* Data, const uint32& Num)
 	{
 		check(Data);
 		auto VecRef = new TWasmRef<wasm_byte_vec_t>();
 		wasm_byte_vec_new(&VecRef->Value, Num * sizeof(uint8), (byte_t*)Data);
-		return TWasmVec(VecRef, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>([](TWasmRef<wasm_byte_vec_t>* VecHandle)
+		return TWasmByteVec(VecRef, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>([](TWasmRef<wasm_byte_vec_t>* VecHandle)
 		{
 			wasm_byte_vec_delete(&VecHandle->Value);
 			delete VecHandle;
@@ -244,28 +265,49 @@ namespace UEWasm
 		return TWasmFuncType(wasm_functype_new(&ParamsVec, &ResultsVec));
 	}
 
-	FORCEINLINE TOptional<TWasmInstance> MakeWasmInstance(const TWasmStore& Store, const TWasmModule& Module,
-	                                                      const TWasmExternVec& ExternVec)
+
+	FORCEINLINE TWasmLinker MakeWasmLinker(const TWasiInstance& WasiInstance, const TWasmStore& Store)
+	{
+		// Create our linker which will be linking our modules together, and then add
+		// our WASI instance to it.
+		TWasmLinker Linker = TWasmLinker(wasmtime_linker_new(Store.Get()));
+		wasmtime_error_t* Error = wasmtime_linker_define_wasi(Linker.Get(), WasiInstance.Get());
+		if (Error != nullptr)
+		{
+			PrintError(TEXT("Failed to create Linker, failed to link WasiInstance."), Error, nullptr);
+		}
+		return Linker;
+	}
+
+	FORCEINLINE TWasiInstance MakeWasiInstance(const TWasmStore& Store, TWasiConfig& Config)
+	{
+		wasm_trap_t* Trap;
+		wasi_instance_t* WasiInstance = wasi_instance_new(Store.Get(), "wasi_snapshot_preview1", Config.Release(), &Trap);
+		if (!WasiInstance)
+		{
+			PrintError(TEXT("New WasiInstance"), nullptr, Trap);
+			WasiInstance = nullptr;
+		}
+
+		return TWasiInstance(WasiInstance);
+	}
+
+	FORCEINLINE TWasmInstance MakeWasmInstance(const TWasmStore& Store, const TWasmModule& Module, const TWasmLinker& Linker)
 	{
 		check(Store.Get());
 		check(Module.Get());
-		check(ExternVec.Get());
+		check(Linker.Get());
 
-		TOptional<TWasmInstance> OptionalWasmInstance;
-
+		wasm_instance_t* Instance;
 		wasm_trap_t* Trap;
-		wasm_instance_t* WasmInstance = wasm_instance_new(Store.Get(), Module.Get(), &ExternVec.Get()->Value, &Trap);
-		if (WasmInstance)
+		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &Instance, &Trap);
+		if (!Instance)
 		{
-			TWasmInstance Instance = TWasmInstance(WasmInstance);
+			PrintError(TEXT("New Instance"), Error, Trap);
+			Instance = nullptr;
+		} 
 
-			OptionalWasmInstance = MoveTemp(Instance);
-		}
-		else if (Trap)
-		{
-			PrintError(TEXT("New Instance"), nullptr, Trap);
-		}
-		return OptionalWasmInstance;
+		return TWasmInstance(Instance);
 	}
 
 	FORCEINLINE TWasmStore MakeWasmStore(const TWasmEngine& Engine)
@@ -279,18 +321,12 @@ namespace UEWasm
 		return TWasmEngine(wasm_engine_new());
 	}
 
-	FORCEINLINE TWasmConfig MakeWasmConfig()
+	FORCEINLINE TWasiConfig MakeWasiConfig()
 	{
-		return TWasmConfig(wasm_config_new());
+		return TWasiConfig(wasi_config_new());
 	}
 
-	FORCEINLINE TWasmEngine MakeWasmEngine(const TWasmConfig& Config)
-	{
-		check(Config.Get());
-		return TWasmEngine(wasm_engine_new_with_config(Config.Get()));
-	}
-
-	FORCEINLINE TWasmModule MakeWasmModule(const TWasmStore& Store, const TWasmVec& Binary)
+	FORCEINLINE TWasmModule MakeWasmModule(const TWasmStore& Store, const TWasmByteVec& Binary)
 	{
 		check(Store.Get());
 		check(Binary.Get());

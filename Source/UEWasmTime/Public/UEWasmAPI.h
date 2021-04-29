@@ -9,8 +9,7 @@ THIRD_PARTY_INCLUDES_END
 struct T##Name##CustomDeleter : TDefaultDelete<WasmType> \
 {\
 	bool bDontDelete;\
-	T##Name##CustomDeleter() = default;\
-	T##Name##CustomDeleter(bool bInDontDelete)\
+	T##Name##CustomDeleter(bool bInDontDelete = false)\
 	{\
 		bDontDelete = bInDontDelete;\
 	}\
@@ -27,6 +26,35 @@ struct T##Name##CustomDeleter : TDefaultDelete<WasmType> \
 	}\
 };\
 typedef TUniquePtr<WasmType, T##Name##CustomDeleter> T##Name
+
+template <typename T>
+struct TWasmRef
+{
+	T Value;
+};
+
+#define DECLARE_CUSTOM_WASMTYPE_REF(Name, WasmType, DeleterFunction)\
+struct T##Name##CustomDeleter : TDefaultDelete<TWasmRef<WasmType>>\
+{\
+	bool bDontDeleteRef;\
+	T##Name##CustomDeleter(bool bInDontDeleteRef = false)\
+	{\
+		bDontDeleteRef = bInDontDeleteRef;\
+	}\
+	void operator()(TWasmRef<WasmType>* Ptr) const\
+	{\
+		if (Ptr)\
+		{\
+			if(!bDontDeleteRef)\
+			{\
+				DeleterFunction(&Ptr->Value);\
+			}\
+			delete Ptr;\
+			Ptr = nullptr;\
+		}\
+	}\
+};\
+typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
 	
 
 FORCEINLINE void PrintError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer)
@@ -103,35 +131,6 @@ namespace UEWas
 		}
 	};
 
-	template <typename T>
-	struct TWasmRef
-	{
-		T Value;
-	};
-
-	template <typename T>
-	struct TWasmGenericDeleter : TDefaultDelete<T>
-	{
-		
-		TFunction<void(T*)> CustomDeleter;
-		
-		TWasmGenericDeleter(TFunction<void(T*)>&& InCustomDeleter)
-		{
-			CustomDeleter = MoveTemp(InCustomDeleter);
-		}
-
-		void operator()(T* Ptr) const
-		{
-			if (Ptr)
-			{
-				check(CustomDeleter);
-				CustomDeleter(Ptr);
-				Ptr = nullptr;
-			}
-		}
-	};
-
-
 	DECLARE_CUSTOM_WASMTYPE(WasiConfig, wasi_config_t, wasi_config_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasiInstance, wasi_instance_t, wasi_instance_delete);
 
@@ -142,10 +141,12 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE(WasmFuncType, wasm_functype_t, wasm_functype_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmFunc, wasm_func_t, wasm_func_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmLinker, wasmtime_linker_t, wasmtime_linker_delete);
+
+	DECLARE_CUSTOM_WASMTYPE_REF(WasmByteVec, wasm_byte_vec_t, wasm_byte_vec_delete);
+	DECLARE_CUSTOM_WASMTYPE_REF(WasmExternVec, wasm_extern_vec_t, wasm_extern_vec_delete);
+	DECLARE_CUSTOM_WASMTYPE_REF(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_vec_delete);
+
 	
-	typedef TUniquePtr<TWasmRef<wasm_byte_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>> TWasmByteVec;
-	typedef TUniquePtr<TWasmRef<wasm_extern_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>> TWasmExternVec;
-	typedef TUniquePtr<TWasmRef<wasm_valtype_vec_t>, TWasmGenericDeleter<TWasmRef<wasm_valtype_vec_t>>> TWasmValTypeVec;
 	typedef wasm_extern_t* TWasmExtern;
 	typedef TWasmByteVec TWasmName;
 
@@ -159,11 +160,7 @@ namespace UEWas
 		{
 			wasm_name_new_empty(&NamePtr->Value);
 		}
-		return TWasmName(NamePtr, TWasmGenericDeleter<TWasmRef<wasm_name_t>>([](TWasmRef<wasm_name_t>* VecHandle)
-		{
-			wasm_name_delete(&VecHandle->Value);
-			delete VecHandle;
-		}));
+		return TWasmName(NamePtr);
 	};
 	
 	FORCEINLINE TWasmExternVec WasmGetInstanceInstanceExports(const TWasmInstance& Instance)
@@ -171,11 +168,7 @@ namespace UEWas
 		check(Instance.Get());
 		auto ExternVec = new TWasmRef<wasm_extern_vec_t>();
 		wasm_instance_exports(Instance.Get(), &ExternVec->Value);
-		return TWasmExternVec(ExternVec, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>([](TWasmRef<wasm_extern_vec_t>* ExternVec)
-		{
-			wasm_extern_vec_delete(&ExternVec->Value);
-			delete ExternVec;
-		}));
+		return TWasmExternVec(ExternVec);
 	}
 	
 	FORCEINLINE TWasmExtern WasmFromFunction(const TWasmFunc& Func)
@@ -203,14 +196,7 @@ namespace UEWas
 
 		auto Out = new TWasmRef<wasm_valtype_vec_t>();
 		wasm_valtype_vec_copy(&Out->Value, &In.Get()->Value);
-		return TWasmValTypeVec(Out, TWasmGenericDeleter<TWasmRef<wasm_valtype_vec_t>>([bDontDelete](TWasmRef<wasm_valtype_vec_t>* VecRef)
-		{
-			if (!bDontDelete)
-			{
-				wasm_valtype_vec_delete(&VecRef->Value);
-			}
-			delete VecRef;
-		}));
+		return TWasmValTypeVec(Out, TWasmValTypeVecCustomDeleter(bDontDelete));
 	}
 
 	FORCEINLINE TWasmValTypeVec MakeWasmValTypeVec(wasm_valtype_t* const* Data, const uint32& Num, bool bDontDelete = false)
@@ -218,15 +204,7 @@ namespace UEWas
 		check(Data);
 		auto ValTypeVec = new TWasmRef<wasm_valtype_vec_t>();
 		wasm_valtype_vec_new(&ValTypeVec->Value, Num, Data);
-		return TWasmValTypeVec(ValTypeVec, TWasmGenericDeleter<TWasmRef<wasm_valtype_vec_t>>(
-			                       [bDontDelete](TWasmRef<wasm_valtype_vec_t>* ValTypeVecHandle)
-			                       {
-				                       if (!bDontDelete)
-				                       {
-					                       wasm_valtype_vec_delete(&ValTypeVecHandle->Value);
-				                       }
-				                       delete ValTypeVecHandle;
-			                       }));
+		return TWasmValTypeVec(ValTypeVec, TWasmValTypeVecCustomDeleter(bDontDelete));
 	}
 
 	FORCEINLINE TWasmExternVec MakeWasmExternVec(wasm_extern_t* const* Data, const uint32& Num)
@@ -234,11 +212,7 @@ namespace UEWas
 		check(Data);
 		auto VecRef = new TWasmRef<wasm_extern_vec_t>();
 		wasm_extern_vec_new(&VecRef->Value, Num, Data);
-		return TWasmExternVec(VecRef, TWasmGenericDeleter<TWasmRef<wasm_extern_vec_t>>([](TWasmRef<wasm_extern_vec_t>* ExternVec)
-		{
-			wasm_extern_vec_delete(&ExternVec->Value);
-			delete ExternVec;
-		}));
+		return TWasmExternVec(VecRef);
 	}
 
 	FORCEINLINE TWasmByteVec MakeWasmVec(uint8* Data, const uint32& Num)
@@ -246,13 +220,8 @@ namespace UEWas
 		check(Data);
 		auto VecRef = new TWasmRef<wasm_byte_vec_t>();
 		wasm_byte_vec_new(&VecRef->Value, Num * sizeof(uint8), (byte_t*)Data);
-		return TWasmByteVec(VecRef, TWasmGenericDeleter<TWasmRef<wasm_byte_vec_t>>([](TWasmRef<wasm_byte_vec_t>* VecHandle)
-		{
-			wasm_byte_vec_delete(&VecHandle->Value);
-			delete VecHandle;
-		}));
+		return TWasmByteVec(VecRef);
 	}
-
 
 	FORCEINLINE TWasmFuncType MakeWasmFuncType(const TWasmValTypeVec& Params, const TWasmValTypeVec& Results)
 	{

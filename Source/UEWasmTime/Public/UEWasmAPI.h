@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "UEWasmTime.h"
 THIRD_PARTY_INCLUDES_START
 #include "wasmtime.h"
 THIRD_PARTY_INCLUDES_END
@@ -33,7 +34,7 @@ struct TWasmRef
 	T Value;
 };
 
-#define DECLARE_CUSTOM_WASMTYPE_REF(Name, WasmType, DeleterFunction)\
+#define DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, AllocationSignature, DeleterFunction)\
 struct T##Name##CustomDeleter : TDefaultDelete<TWasmRef<WasmType>>\
 {\
 	bool bDontDeleteRef;\
@@ -53,11 +54,25 @@ struct T##Name##CustomDeleter : TDefaultDelete<TWasmRef<WasmType>>\
 			Ptr = nullptr;\
 		}\
 	}\
+	static void\
+	AllocationSignature\
+	{\
+		return AllocateFunction(&Out, Num, Data);\
+	}\
+	typedef WasmVecType StaticElementType;\
+	typedef WasmType StaticWasmType;\
+	typedef T##Name##CustomDeleter StaticWasmDeleter;\
 };\
 typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
-	
 
-FORCEINLINE void PrintError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer)
+#define DECLARE_CUSTOM_WASMTYPE_VEC(Name, WasmType, WasmVecType, AllocateFunction, DeleterFunction)\
+	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* Data, uint32 Num), DeleterFunction)
+
+#define DECLARE_CUSTOM_WASMTYPE_VEC_CONST(Name, WasmType, WasmVecType, AllocateFunction, DeleterFunction)\
+	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* const* Data, uint32 Num), DeleterFunction)
+
+
+FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer)
 {
 	wasm_byte_vec_t ErrorMessage = {0, nullptr};
 	if (ErrorPointer != nullptr)
@@ -74,10 +89,12 @@ FORCEINLINE void PrintError(const FString& Caller, wasmtime_error_t* ErrorPointe
 	if (ErrorMessage.data != nullptr)
 	{
 		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
-		UE_LOG(LogBadLadsPlugin, Error, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
-		checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		UE_LOG(LogEngine, Error, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
+		return false;
 	}
+	return true;
 }
 
 namespace UEWas
@@ -142,9 +159,11 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE(WasmFunc, wasm_func_t, wasm_func_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmLinker, wasmtime_linker_t, wasmtime_linker_delete);
 
-	DECLARE_CUSTOM_WASMTYPE_REF(WasmByteVec, wasm_byte_vec_t, wasm_byte_vec_delete);
-	DECLARE_CUSTOM_WASMTYPE_REF(WasmExternVec, wasm_extern_vec_t, wasm_extern_vec_delete);
-	DECLARE_CUSTOM_WASMTYPE_REF(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_vec_delete);
+
+	DECLARE_CUSTOM_WASMTYPE_VEC(WasmByteVec, wasm_byte_vec_t, wasm_byte_t, wasm_byte_vec_new, wasm_byte_vec_delete);
+	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmExternVec, wasm_extern_vec_t, wasm_extern_t, wasm_extern_vec_new, wasm_extern_vec_delete);
+	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_t, wasm_valtype_vec_new, wasm_valtype_vec_delete);
+	DECLARE_CUSTOM_WASMTYPE_VEC(WasmValVec, wasm_val_vec_t, wasm_val_t, wasm_val_vec_new, wasm_val_vec_delete);
 
 	
 	typedef wasm_extern_t* TWasmExtern;
@@ -199,28 +218,32 @@ namespace UEWas
 		return TWasmValTypeVec(Out, TWasmValTypeVecCustomDeleter(bDontDelete));
 	}
 
-	FORCEINLINE TWasmValTypeVec MakeWasmValTypeVec(wasm_valtype_t* const* Data, const uint32& Num, bool bDontDelete = false)
+	template <typename VecArrayType = TWasmByteVec>
+	FORCEINLINE VecArrayType MakeWasmVecConst(typename VecArrayType::StaticElementType* const* Data, const uint32& Num, bool bDontDelete = false)
 	{
-		check(Data);
-		auto ValTypeVec = new TWasmRef<wasm_valtype_vec_t>();
-		wasm_valtype_vec_new(&ValTypeVec->Value, Num, Data);
-		return TWasmValTypeVec(ValTypeVec, TWasmValTypeVecCustomDeleter(bDontDelete));
+		const auto Vec = new TWasmRef<typename VecArrayType::StaticWasmType>();
+		if(Data != nullptr && Num != 0)
+		{
+			VecArrayType::Allocate(Vec->Value, Data, Num);
+		} 
+		return VecArrayType(Vec, typename VecArrayType::StaticWasmDeleter(bDontDelete));
+	}
+	
+	template <typename VecArrayType = TWasmByteVec>
+	FORCEINLINE VecArrayType MakeWasmVec(const TArray<typename VecArrayType::StaticElementType*>& Data, bool bDontDelete = false)
+	{
+		return MakeWasmVec<VecArrayType>(Data.GetData(), Data.Num(), bDontDelete);
 	}
 
-	FORCEINLINE TWasmExternVec MakeWasmExternVec(wasm_extern_t* const* Data, const uint32& Num)
+	template<typename VecArrayType = TWasmByteVec>
+	FORCEINLINE VecArrayType MakeWasmVec(typename VecArrayType::StaticElementType* Data, const uint32& Num, bool bDontDelete = false)
 	{
-		check(Data);
-		auto VecRef = new TWasmRef<wasm_extern_vec_t>();
-		wasm_extern_vec_new(&VecRef->Value, Num, Data);
-		return TWasmExternVec(VecRef);
-	}
-
-	FORCEINLINE TWasmByteVec MakeWasmVec(uint8* Data, const uint32& Num)
-	{
-		check(Data);
-		auto VecRef = new TWasmRef<wasm_byte_vec_t>();
-		wasm_byte_vec_new(&VecRef->Value, Num * sizeof(uint8), (byte_t*)Data);
-		return TWasmByteVec(VecRef);
+		const auto Vec = new TWasmRef<typename VecArrayType::StaticWasmType>();
+		if(Data != nullptr && Num != 0)
+		{
+			VecArrayType::Allocate(Vec->Value, Data, Num);
+		} 
+		return VecArrayType(Vec, typename VecArrayType::StaticWasmDeleter(bDontDelete));
 	}
 
 	FORCEINLINE TWasmFuncType MakeWasmFuncType(const TWasmValTypeVec& Params, const TWasmValTypeVec& Results)
@@ -241,10 +264,7 @@ namespace UEWas
 		// our WASI instance to it.
 		TWasmLinker Linker = TWasmLinker(wasmtime_linker_new(Store.Get()));
 		wasmtime_error_t* Error = wasmtime_linker_define_wasi(Linker.Get(), WasiInstance.Get());
-		if (Error != nullptr)
-		{
-			PrintError(TEXT("Failed to create Linker, failed to link WasiInstance."), Error, nullptr);
-		}
+		HandleError(TEXT("Failed to create Linker, failed to link WasiInstance."), Error, nullptr);
 		return Linker;
 	}
 
@@ -254,8 +274,7 @@ namespace UEWas
 		wasi_instance_t* WasiInstance = wasi_instance_new(Store.Get(), "wasi_snapshot_preview1", Config.Release(), &Trap);
 		if (!WasiInstance)
 		{
-			PrintError(TEXT("New WasiInstance"), nullptr, Trap);
-			WasiInstance = nullptr;
+			HandleError(TEXT("New WasiInstance"), nullptr, Trap);
 		}
 
 		return TWasiInstance(WasiInstance);
@@ -272,7 +291,7 @@ namespace UEWas
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &Instance, &Trap);
 		if (!Instance)
 		{
-			PrintError(TEXT("New Instance"), Error, Trap);
+			HandleError(TEXT("New Instance"), Error, Trap);
 			Instance = nullptr;
 		} 
 

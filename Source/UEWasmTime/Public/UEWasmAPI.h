@@ -131,24 +131,23 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_t, wasm_valtype_vec_new, wasm_valtype_vec_delete);
 	DECLARE_CUSTOM_WASMTYPE_VEC(WasmValVec, wasm_val_vec_t, wasm_val_t, wasm_val_vec_new, wasm_val_vec_delete);
 
-
 	 // TSharedPtr checks for type completeness so we use std::shared_ptr instead.
 	typedef std::shared_ptr<wasm_valtype_t> TWasmValType;
 	
 	typedef wasm_extern_t* TWasmExtern;
 	typedef TWasmByteVec TWasmName;
 
-	FORCEINLINE TWasmValType MakeWasmValType(wasm_valtype_t* ValType)
+	FORCEINLINE TWasmValType MakeWasmValType(wasm_valtype_t* InValType)
 	{
-		check(ValType);
-		auto Test = TWasmValType(ValType, [](wasm_valtype_t* ValType)
+		check(InValType);
+		TWasmValType Val = TWasmValType(InValType, [](wasm_valtype_t* ValType)
 		{
 			if(ValType)
 			{
 				wasm_valtype_delete(ValType);
 			}
 		});
-		return Test;
+		return Val;
 	}
 
 	FORCEINLINE TWasmName MakeWasmName(const FString& InString)
@@ -234,7 +233,6 @@ namespace UEWas
 	FORCEINLINE TWasmValTypeVec MakeWasmValTypeVecConst(TArray<TWasmValType>& Array,
 													bool bDontDelete = false)
 	{
-		
 		return MakeWasmValTypeVecConst(Array.GetData(), Array.Num(), bDontDelete);
 	}
 

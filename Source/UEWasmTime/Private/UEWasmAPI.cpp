@@ -2,24 +2,46 @@
 
 namespace UEWas
 {
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmContext& Context, wasm_func_callback_t CallbackFunction)
+	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmLinker& Linker,
+	                                        const TWasmExtern& Extern)
 	{
-		return LinkFunctionAsHostImport(Context.Store, Context.Linker, CallbackFunction);
+		return false;// HandleError(TEXT("Link Extern"), wasmtime_linker_define(Linker.Get(), &MakeWasmName(ExternModule).Get()->Value,&MakeWasmName(ExternName).Get()->Value, Extern));
+	}
+
+	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmContext& Context,
+		const TWasmExtern& Extern)
+	{
+		return LinkExtern(ExternModule, ExternName, Context.Linker, Extern);
+	}
+
+	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmContext& Context, wasm_func_callback_t OverrideCallback)
+	{
+		return LinkFunctionAsHostImport(Context.Store, Context.Linker, OverrideCallback);
 	}
 
 	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmStore& Store,
-	                                                      const TWasmLinker& Linker, wasm_func_callback_t InCallbackFunction)
+	                                                      const TWasmLinker& Linker, wasm_func_callback_t OverrideCallback)
 	{
+		wasm_func_callback_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
+#if !UE_BUILD_SHIPPING
+		// @todo Don't assert here because we want to add new callbacks while live coding. Don't rely on this functionality in shipping.
+		if (!Callback)
+		{
+			UE_LOG(LogUEWasmTime, Error, TEXT("!!! No callback specified for %s. Will CRASH in shipping."), *WasmNameToString(Name));
+			return false;
+		}
+#endif
+
 		auto ArgumentsSignature = MakeWasmValTypeVecConst(ArgumentsSignatureArray);
 		auto ResultSignature = MakeWasmValTypeVecConst(ResultSignatureArray);
 
 		TWasmFuncType FunctionSignature = MakeWasmFuncType(MoveTemp(ArgumentsSignature), MoveTemp(ResultSignature));
-		const TWasmFunc& FuncCallback = MakeWasmFunc(Store, FunctionSignature, InCallbackFunction);
+		const TWasmFunc& FuncCallback = MakeWasmFunc(Store, FunctionSignature, Callback);
 		FunctionSignature.Reset();
 
-		const TWasmName& ModuleName = MakeWasmName(TEXT(""));
+
 		wasmtime_error_t* Error = wasmtime_linker_define(Linker.Get(), &ModuleName.Get()->Value, &Name.Get()->Value,
-		                                                 WasmFromFunction(FuncCallback));
+		                                                 WasmFunctionAsExtern(FuncCallback));
 		return HandleError(TEXT("Linking"), Error, nullptr);
 	}
 
@@ -40,7 +62,7 @@ namespace UEWas
 			return false;
 		}
 
-		const TWasmExternVec Exports = WasmGetInstanceInstanceExports(FuncInstance);
+		const TWasmExternVec Exports = WasmGetInstanceExports(FuncInstance);
 
 		if (Exports.Get()->Value.size == 0)
 		{

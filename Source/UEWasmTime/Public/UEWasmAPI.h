@@ -1,5 +1,5 @@
 ﻿#pragma once
-
+#include <memory>
 #include "UEWasmTime.h"
 THIRD_PARTY_INCLUDES_START
 #include "wasmtime.h"
@@ -101,7 +101,7 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 	if (ErrorMessage.data != nullptr)
 	{
 		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
-		UE_LOG(LogEngine, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
 		return false;
@@ -137,6 +137,18 @@ namespace UEWas
 	typedef wasm_extern_t* TWasmExtern;
 	typedef TWasmByteVec TWasmName;
 
+	FORCEINLINE FString WasmNameToString(const TWasmName& Name)
+	{
+		if(Name.Get())
+		{
+			if(Name.Get()->Value.size > 0)
+			{
+				return FString(UTF8_TO_TCHAR(Name.Get()->Value.data), Name.Get()->Value.size);
+			}
+		}
+		return TEXT("");
+	}
+	
 	FORCEINLINE TWasmValType MakeWasmValType(wasm_valtype_t* InValType)
 	{
 		check(InValType);
@@ -422,4 +434,69 @@ namespace UEWas
 			return MakeWasmValTypeAnyRef();
 		}
 	};
+
+
+	class UEWASMTIME_API TWasmContext
+    {
+    public:
+    	TWasmStore Store;
+    	TWasiInstance Instance;
+    	TWasmLinker Linker;
+    public:
+        TWasmContext(const TWasmEngine& InEngine, const FString& WorkspacePath)
+        {
+	        TWasiConfig TempConfig = MakeWasiConfig();
+	        Store = MakeWasmStore(InEngine);
+	        if (Store.IsValid())
+	        {
+		        if (wasi_config_preopen_dir(TempConfig.Get(), TCHAR_TO_UTF8(*WorkspacePath), TCHAR_TO_UTF8(TEXT(""))))
+		        {
+			        if (TempConfig.IsValid())
+			        {
+				        Instance = MakeWasiInstance(Store, MoveTemp(TempConfig));
+				        if (Instance.IsValid())
+				        {
+					        Linker = MakeWasmLinker(Instance, Store);
+				        }
+			        }
+		        }
+	        }
+        }
+    
+    	FORCEINLINE bool IsValid() const
+    	{
+    		return Linker.IsValid();
+    	}
+    };
+    
+    
+    class UEWASMTIME_API TWasmFunctionSignature
+    {
+    protected:
+    	TWasmName Name;
+    	TArray<TWasmValType> ArgumentsSignatureArray;
+    	TArray<TWasmValType> ResultSignatureArray;
+    public:
+    	TWasmFunctionSignature(const FString& InFunctionName, TArray<TWasmValType>&& InArgsSignature,
+    	                               TArray<TWasmValType>&& InResultSignature)
+    	{
+    		Name = MakeWasmName(InFunctionName);
+    		ArgumentsSignatureArray = MoveTemp(InArgsSignature);
+    		ResultSignatureArray = MoveTemp(InResultSignature);
+    	};
+    
+    	TWasmFunctionSignature(const FString& InFunctionName, const TArray<TWasmValType>& InArgsSignature,
+    	                               const TArray<TWasmValType>& InResultSignature)
+    	{
+    		Name = MakeWasmName(InFunctionName);
+    		ArgumentsSignatureArray = InArgsSignature;
+    		ResultSignatureArray = InResultSignature;
+    	};
+    
+    
+    	bool LinkFunctionAsHostImport(const TWasmContext& Context, wasm_func_callback_t CallbackFunction);
+    	bool LinkFunctionAsHostImport(const TWasmStore& Store, const TWasmLinker& Linker, wasm_func_callback_t CallbackFunction);
+    
+    	bool Call(const TWasmModule& Module, const TWasmLinker& Linker, TArray<wasm_val_t> Args, TArray<wasm_val_t>& Results);
+    };
 }

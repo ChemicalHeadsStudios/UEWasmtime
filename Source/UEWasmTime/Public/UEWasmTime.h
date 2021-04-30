@@ -1,8 +1,8 @@
 #pragma once
 
-DECLARE_LOG_CATEGORY_EXTERN(LogUEWasmTime, Log, All);
+UEWASMTIME_API DECLARE_LOG_CATEGORY_EXTERN(LogUEWasmTime, Log, All);
 
-class FUEWasmTimeModule : public IModuleInterface
+class UEWASMTIME_API FUEWasmTimeModule : public IModuleInterface
 {
 public:
 

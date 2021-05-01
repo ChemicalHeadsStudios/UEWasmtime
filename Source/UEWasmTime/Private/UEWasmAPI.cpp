@@ -14,15 +14,15 @@ namespace UEWas
 		return LinkExtern(ExternModule, ExternName, Context.Linker, Extern);
 	}
 
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmContext& Context, wasm_func_callback_t OverrideCallback)
+	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmContext& Context, wasmtime_func_callback_t OverrideCallback)
 	{
 		return LinkFunctionAsHostImport(Context.Store, Context.Linker, OverrideCallback);
 	}
 
 	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmStore& Store,
-	                                                      const TWasmLinker& Linker, wasm_func_callback_t OverrideCallback)
+	                                                      const TWasmLinker& Linker, wasmtime_func_callback_t OverrideCallback)
 	{
-		wasm_func_callback_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
+		wasmtime_func_callback_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
 #if !UE_BUILD_SHIPPING
 		// @todo Don't assert here because we want to add new callbacks while live coding. Don't rely on this functionality in shipping.
 		if (!Callback)
@@ -61,7 +61,7 @@ namespace UEWas
 			UE_LOG(LogUEWasmTime, Warning, TEXT("Error instantiating module!"));
 			return false;
 		}
-
+		
 		const TWasmExternVec Exports = WasmGetInstanceExports(FuncInstance);
 
 		if (Exports.Get()->Value.size == 0)

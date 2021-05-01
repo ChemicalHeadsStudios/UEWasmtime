@@ -127,6 +127,7 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE(WasmFunc, wasm_func_t, wasm_func_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmLinker, wasmtime_linker_t, wasmtime_linker_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasmGlobalVal, wasm_global_t, wasm_global_delete);
+	DECLARE_CUSTOM_WASMTYPE(WasmExport, wasm_extern_t, wasm_extern_delete);
 
 	// VEC types have an overhead of an additional pointer.
 	DECLARE_CUSTOM_WASMTYPE_VEC(WasmByteVec, wasm_byte_vec_t, wasm_byte_t, wasm_byte_vec_new, wasm_byte_vec_delete);
@@ -209,12 +210,12 @@ namespace UEWas
 	}
 
 	FORCEINLINE TWasmFunc MakeWasmFunc(const TWasmStore& WasmStore, const TWasmFuncType& WasmFunctype,
-	                                   wasm_func_callback_t FunctionCallback)
+	                                   wasmtime_func_callback_t FunctionCallback)
 	{
 		check(FunctionCallback);
 		check(WasmFunctype.Get())
 		check(WasmStore.Get());
-		return TWasmFunc(wasm_func_new(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback));
+		return TWasmFunc(wasmtime_func_new(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback));
 	}
 
 	template <typename VecArrayType = TWasmByteVec>
@@ -351,9 +352,9 @@ namespace UEWas
 		return TWasmConfig(wasm_config_new());
 	}
 
-	FORCEINLINE TWasmEngine MakeWasmEngine(const TWasmConfig& Config)
+	FORCEINLINE TWasmEngine MakeWasmEngine(TWasmConfig&& Config)
 	{
-		return TWasmEngine(wasm_engine_new_with_config(Config.Get()));
+		return TWasmEngine(wasm_engine_new_with_config(Config.Release()));
 	}
 
 	FORCEINLINE TWasmEngine MakeWasmEngine()
@@ -530,7 +531,7 @@ namespace UEWas
 		TWasmName Name;
 		TArray<TWasmValType> ArgumentsSignatureArray;
 		TArray<TWasmValType> ResultSignatureArray;
-		wasm_func_callback_t ImportCallback;
+		wasmtime_func_callback_t ImportCallback;
 	public:
 		TWasmFunctionSignature(TWasmFunctionSignature&& MoveSignature)
 		{
@@ -542,7 +543,7 @@ namespace UEWas
 		};
 
 		TWasmFunctionSignature(const FString& InModuleName, const FString& InFunctionName, TArray<TWasmValType>&& InArgsSignature,
-		                       TArray<TWasmValType>&& InResultSignature, wasm_func_callback_t InImportCallback = nullptr)
+		                       TArray<TWasmValType>&& InResultSignature, wasmtime_func_callback_t InImportCallback = nullptr)
 		{
 			ModuleName = MakeWasmName(InModuleName);
 			Name = MakeWasmName(InFunctionName);
@@ -552,7 +553,7 @@ namespace UEWas
 		};
 
 		TWasmFunctionSignature(const FString& InModuleName, const FString& InFunctionName, const TArray<TWasmValType>& InArgsSignature = {},
-		                       const TArray<TWasmValType>& InResultSignature = {}, wasm_func_callback_t InImportCallback = nullptr)
+		                       const TArray<TWasmValType>& InResultSignature = {}, wasmtime_func_callback_t InImportCallback = nullptr)
 		{
 			ModuleName = MakeWasmName(InModuleName);
 			Name = MakeWasmName(InFunctionName);
@@ -565,8 +566,8 @@ namespace UEWas
 		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmLinker& Linker, const TWasmExtern& Extern);
 		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmContext& Context, const TWasmExtern& Extern);
 
-		bool LinkFunctionAsHostImport(const TWasmContext& Context, wasm_func_callback_t OverrideCallback = nullptr);
-		bool LinkFunctionAsHostImport(const TWasmStore& Store, const TWasmLinker& Linker, wasm_func_callback_t OverrideCallback = nullptr);
+		bool LinkFunctionAsHostImport(const TWasmContext& Context, wasmtime_func_callback_t OverrideCallback = nullptr);
+		bool LinkFunctionAsHostImport(const TWasmStore& Store, const TWasmLinker& Linker, wasmtime_func_callback_t OverrideCallback = nullptr);
 
 		bool Call(const TWasmModule& Module, const TWasmLinker& Linker, TArray<wasm_val_t> Args, TArray<wasm_val_t>& Results);
 
@@ -582,5 +583,43 @@ namespace UEWas
 	FORCEINLINE TWasmFunctionSignaturePtr MakeWasmFunctionSignature(TWasmFunctionSignature&& Signature)
 	{
 		return MakeShareable<TWasmFunctionSignature>(new TWasmFunctionSignature(MoveTemp(Signature)));
+	}
+
+	FORCEINLINE TWasmExport WasmGetExport(const wasmtime_caller_t* Caller, const FString& ExportName)
+	{
+		return TWasmExport(wasmtime_caller_export_get(Caller, &MakeWasmName(ExportName).Get()->Value));
+	}
+
+	FORCEINLINE FString WasmMemoryReadString(const wasmtime_caller_t* Caller, const int32& PointerOffset, const int32& NumChars)
+	{
+		const TWasmExport& Export = WasmGetExport(Caller, TEXT("memory"));
+		if (Export.IsValid())
+		{
+			wasm_memory_t* Memory = wasm_extern_as_memory(Export.Get());
+			if (Memory)
+			{
+				const uint64_t NumBytesMemory = wasm_memory_data_size(Memory);
+				const uint64_t Address = PointerOffset;
+				const uint64_t StringLength = NumChars;
+				if (NumBytesMemory > 0 && NumBytesMemory > (Address + StringLength))
+				{
+					TArray<byte_t> Copied;
+					Copied.Reserve(StringLength);
+					
+					byte_t* Data = wasm_memory_data(Memory);
+					for (uint64_t Index = 0; Index < StringLength; Index++)
+					{
+						const TCHAR& Char = Data[Address + Index];
+						Copied.Emplace(Char);
+						if(Char == '\0')
+						{
+							break;
+						}
+					}
+					return FString(Copied.GetData(), Copied.Num());
+				}
+			}
+		}
+		return TEXT("");
 	}
 }

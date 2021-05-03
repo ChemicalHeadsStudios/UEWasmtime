@@ -1,5 +1,7 @@
 ﻿#pragma once
 #include <memory>
+#include <string>
+
 #include "UEWasmTime.h"
 THIRD_PARTY_INCLUDES_START
 #include "wasmtime.h"
@@ -115,6 +117,7 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
  */
 namespace UEWas
 {
+	class TWasmExecutionContext;
 	DECLARE_CUSTOM_WASMTYPE(WasiConfig, wasi_config_t, wasi_config_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasiInstance, wasi_instance_t, wasi_instance_delete);
 
@@ -148,23 +151,10 @@ namespace UEWas
 		{
 			if (Name.Get()->Value.size > 0)
 			{
-				return FString(UTF8_TO_TCHAR(Name.Get()->Value.data), Name.Get()->Value.size);
+				return FString(Name.Get()->Value.size, UTF8_TO_TCHAR(Name.Get()->Value.data));
 			}
 		}
 		return TEXT("");
-	}
-
-	FORCEINLINE TWasmValType MakeWasmValType(wasm_valtype_t* InValType)
-	{
-		check(InValType);
-		TWasmValType Val = TWasmValType(InValType, [](wasm_valtype_t* ValType)
-		{
-			if (ValType)
-			{
-				wasm_valtype_delete(ValType);
-			}
-		});
-		return Val;
 	}
 
 	FORCEINLINE TWasmName MakeWasmName(const FString& InString)
@@ -179,7 +169,20 @@ namespace UEWas
 			wasm_name_new_empty(&NamePtr->Value);
 		}
 		return TWasmName(NamePtr);
-	};
+	}
+
+	FORCEINLINE TWasmValType MakeWasmValType(wasm_valtype_t* InValType)
+	{
+		check(InValType);
+		TWasmValType Val = TWasmValType(InValType, [](wasm_valtype_t* ValType)
+		{
+			if (ValType)
+			{
+				wasm_valtype_delete(ValType);
+			}
+		});
+		return Val;
+	}
 
 	FORCEINLINE TWasmExternVec WasmGetInstanceExports(const TWasmInstance& Instance)
 	{
@@ -204,7 +207,7 @@ namespace UEWas
 		return wasm_func_as_extern(Func.Get());
 	}
 
-	FORCEINLINE TWasmFunc WasmToFunction(const TWasmExtern& Extern)
+	FORCEINLINE TWasmFunc WasmExportToFunction(const TWasmExtern& Extern)
 	{
 		return TWasmFunc(wasm_extern_as_func(Extern), TWasmFuncCustomDeleter(true));
 	}
@@ -333,11 +336,21 @@ namespace UEWas
 		wasm_instance_t* RawInstance;
 		wasm_trap_t* Trap;
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
-		if (HandleError(TEXT("New Instance"), Error, Trap))
+
+		if(RawInstance)
 		{
+			// if(Trap && Trap)
+			// {
+			// 	wasm_trap_delete(Trap);
+			// }
+
+			// if(Error)
+			// {
+			// 	wasmtime_error_delete(Error);
+			// }
+			//
 			return TWasmInstance(RawInstance);
 		}
-
 		return {};
 	}
 
@@ -395,6 +408,7 @@ namespace UEWas
 			return MakeWasmValTypeInt32();
 		}
 	};
+
 
 	template <>
 	struct TWasmValue<int64_t>
@@ -479,54 +493,11 @@ namespace UEWas
 		// wasm_globaltype_delete(GlobalType);
 		return Out;
 	}
-
-
-	class UEWASMTIME_API TWasmContext
-	{
-	public:
-		TWasmStore Store;
-		TWasiInstance Instance;
-		TWasmLinker Linker;
-	protected:
-		bool bValid;
-
-
-	public:
-		TWasmContext(const TWasmEngine& InEngine, const FString& WorkspacePath)
-		{
-			bValid = false;
-			TWasiConfig TempConfig = MakeWasiConfig();
-			Store = MakeWasmStore(InEngine);
-			if (Store.IsValid())
-			{
-				if (wasi_config_preopen_dir(TempConfig.Get(), TCHAR_TO_UTF8(*WorkspacePath), TCHAR_TO_UTF8(TEXT(""))))
-				{
-					if (TempConfig.IsValid())
-					{
-						Instance = MakeWasiInstance(Store, MoveTemp(TempConfig));
-						if (Instance.IsValid())
-						{
-							Linker = MakeWasmLinker(Instance, Store);
-							if (Linker.IsValid())
-							{
-								bValid = true;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		FORCEINLINE bool IsValid() const
-		{
-			return bValid;
-		}
-	};
-
-
-	class UEWASMTIME_API TWasmFunctionSignature
+	
+		class UEWASMTIME_API TWasmFunctionSignature
 	{
 	protected:
+		int32 CachedExternIndex = INDEX_NONE;
 		TWasmName ModuleName;
 		TWasmName Name;
 		TArray<TWasmValType> ArgumentsSignatureArray;
@@ -564,35 +535,163 @@ namespace UEWas
 
 
 		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmLinker& Linker, const TWasmExtern& Extern);
-		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmContext& Context, const TWasmExtern& Extern);
+		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmExecutionContext& Context, const TWasmExtern& Extern);
 
-		bool LinkFunctionAsHostImport(const TWasmContext& Context, wasmtime_func_callback_t OverrideCallback = nullptr);
-		bool LinkFunctionAsHostImport(const TWasmStore& Store, const TWasmLinker& Linker, wasmtime_func_callback_t OverrideCallback = nullptr);
+		bool LinkFunctionAsHostImport(const TWasmExecutionContext& Context, wasmtime_func_callback_t OverrideCallback = nullptr);
+		bool LinkFunctionAsHostImport(const TWasmStore& Store, const TWasmLinker& Linker,
+		                              wasmtime_func_callback_t OverrideCallback = nullptr);
 
-		bool Call(const TWasmModule& Module, const TWasmLinker& Linker, TArray<wasm_val_t> Args, TArray<wasm_val_t>& Results);
+		bool Call(const uint32& FuncExternIndex, const TWasmInstance& Instance, TArray<wasm_val_t> Args,
+		          TArray<wasm_val_t>& Results);
+
+		bool Exists(const TWasmModule& Module, const TWasmLinker& Linker) const;
+
 
 		FORCEINLINE FString GetName() const
 		{
 			return WasmNameToString(Name);
 		}
 	};
-
+	
 	UEWASMTIME_API typedef TSharedPtr<TWasmFunctionSignature> TWasmFunctionSignaturePtr;
 	UEWASMTIME_API typedef TSharedRef<TWasmFunctionSignature> TWasmFunctionSignatureRef;
 
+
+	class UEWASMTIME_API TWasmExecutionContext
+	{
+	public:
+		TWasmStore Store;
+		TWasiInstance LinkerInstance;
+		TWasmLinker Linker;
+		TWasmInstance Instance;
+		
+	protected:
+		bool bValid;
+
+	public:
+		TWasmExecutionContext(const TWasmModule& Module, const TWasmEngine& InEngine, const TArray<TWasmFunctionSignaturePtr>& ImportFunctions, const FString& WorkspacePath)
+		{
+			bValid = false;
+			TWasiConfig TempConfig = MakeWasiConfig();
+			Store = MakeWasmStore(InEngine);
+			if (Store.IsValid())
+			{
+				if (wasi_config_preopen_dir(TempConfig.Get(), TCHAR_TO_UTF8(*WorkspacePath), TCHAR_TO_UTF8(TEXT(""))))
+				{
+					if (TempConfig.IsValid())
+					{
+						LinkerInstance = MakeWasiInstance(Store, MoveTemp(TempConfig));
+						if (LinkerInstance.IsValid())
+						{
+							Linker = MakeWasmLinker(LinkerInstance, Store);
+							if (Linker.IsValid())
+							{
+								for (const TWasmFunctionSignaturePtr& Import : ImportFunctions)
+								{
+									check(Import.Get());
+									Import->LinkFunctionAsHostImport(*this);
+								}
+								
+								Instance = MakeWasmInstance(Module, Linker);
+								if(Instance.IsValid())
+								{
+									bValid = true;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		FORCEINLINE bool IsValid() const
+		{
+			return bValid;
+		}
+	};
+
+
+	
+	// template <>
+	// struct TWasmValue<FString>
+	// {
+	// 	static wasm_val_t NewValue(const FString& InValue, const TWasmModule& Module, const TWasmLinker& Linker,
+	// 	                           const TWasmFunctionSignaturePtrWithIndex& AllocFunction,
+	// 	                           const TWasmFunctionSignaturePtrWithIndex& PinFunction = {})
+	// 	{
+	// 		wasm_val_t WasmValue;
+	// 		WasmValue.kind = WASM_I32;
+	// 		WasmValue.of.i32 = INDEX_NONE;
+	//
+	// 		std::string Utf8String = std::string(TCHAR_TO_UTF8(*InValue));
+	// 		// UTF8 string length + null terminator
+	// 		const int32 SizeInBytes = Utf8String.length() + 1;
+	// 		TArray<wasm_val_t> Results;
+	// 		if (AllocFunction.Function && AllocFunction.Call(Module, Linker,
+	// 		                                                 {TWasmValue<int32>::NewValue(SizeInBytes), TWasmValue<int32>::NewValue(0)},
+	// 		                                                 Results))
+	// 		{
+	// 			UE_LOG(LogUEWasmTime, Warning, TEXT("Alloc %i"), Results[0].of.i32);
+	// 		} else
+	// 		{
+	// 			UE_LOG(LogUEWasmTime, Warning, TEXT("Failed alloc"));
+	// 		}
+	// 		return WasmValue;
+	// 	}
+	//
+	// 	static TWasmValType GetType()
+	// 	{
+	// 		return MakeWasmValTypeInt32();
+	// 	}
+	// };
+	//
 	FORCEINLINE TWasmFunctionSignaturePtr MakeWasmFunctionSignature(TWasmFunctionSignature&& Signature)
 	{
 		return MakeShareable<TWasmFunctionSignature>(new TWasmFunctionSignature(MoveTemp(Signature)));
 	}
 
-	FORCEINLINE TWasmExport WasmGetExport(const wasmtime_caller_t* Caller, const FString& ExportName)
+	FORCEINLINE TWasmExport WasmGetCallerExport(const wasmtime_caller_t* Caller, const FString& ExportName)
 	{
 		return TWasmExport(wasmtime_caller_export_get(Caller, &MakeWasmName(ExportName).Get()->Value));
 	}
 
+	// FORCEINLINE TWasmExternVec WasmGetExports(const TWasmModule& Module, const TWasmLinker& Linker, int32 CheckIndex = INDEX_NONE)
+	// {
+	// 	const TWasmInstance LinkerInstance = MakeWasmInstance(Module, Linker);
+	// 	if (!LinkerInstance.IsValid())
+	// 	{
+	// 		UE_LOG(LogUEWasmTime, Warning, TEXT("Failed to create module instance."));
+	// 		return {nullptr};
+	// 	}
+	//
+	// 	TWasmExternVec Exports = WasmGetInstanceExports(LinkerInstance);
+	// 	if (!Exports.IsValid())
+	// 	{
+	// 		UE_LOG(LogUEWasmTime, Warning, TEXT("Error accessing export function!"));
+	// 		return {nullptr};
+	// 	}
+	//
+	// 	if(CheckIndex > 0)
+	// 	{
+	// 		if (Exports.Get()->Value.size < CheckIndex)
+	// 		{
+	// 			UE_LOG(LogUEWasmTime, Warning, TEXT("Tried fetching out of bounds function!"));
+	// 			return {nullptr};
+	// 		}
+	// 	}
+	//
+	// 	if(Exports.Get()->Value.size <= 0)
+	// 	{
+	// 		UE_LOG(LogUEWasmTime, Warning, TEXT("No exports found in instance!"));
+	// 		return {nullptr};
+	// 	}
+	//
+	// 	return Exports;
+	// }
+
 	FORCEINLINE FString WasmMemoryReadString(const wasmtime_caller_t* Caller, const int32& PointerOffset, const int32& NumChars)
 	{
-		const TWasmExport& Export = WasmGetExport(Caller, TEXT("memory"));
+		const TWasmExport& Export = WasmGetCallerExport(Caller, TEXT("memory"));
 		if (Export.IsValid())
 		{
 			wasm_memory_t* Memory = wasm_extern_as_memory(Export.Get());
@@ -605,18 +704,22 @@ namespace UEWas
 				{
 					TArray<byte_t> Copied;
 					Copied.Reserve(StringLength);
-					
+
 					byte_t* Data = wasm_memory_data(Memory);
 					for (uint64_t Index = 0; Index < StringLength; Index++)
 					{
 						const TCHAR& Char = Data[Address + Index];
 						Copied.Emplace(Char);
-						if(Char == '\0')
+						if (Char == '\0')
 						{
 							break;
 						}
 					}
-					return FString(Copied.GetData(), Copied.Num());
+					
+					if (Copied.Num() > 0)
+					{
+						return FString(Copied.Num() - 1, Copied.GetData());
+					}
 				}
 			}
 		}

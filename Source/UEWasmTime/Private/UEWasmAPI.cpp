@@ -8,14 +8,15 @@ namespace UEWas
 		return false;// HandleError(TEXT("Link Extern"), wasmtime_linker_define(Linker.Get(), &MakeWasmName(ExternModule).Get()->Value,&MakeWasmName(ExternName).Get()->Value, Extern));
 	}
 
-	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmContext& Context,
+	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmExecutionContext& Context,
 		const TWasmExtern& Extern)
 	{
 		return LinkExtern(ExternModule, ExternName, Context.Linker, Extern);
 	}
 
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmContext& Context, wasmtime_func_callback_t OverrideCallback)
+	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmExecutionContext& Context, wasmtime_func_callback_t OverrideCallback)
 	{
+		UE_LOG(LogUEWasmTime, Warning, TEXT("Linked Host function %s::%s"), *WasmNameToString(Name), *WasmNameToString(ModuleName));
 		return LinkFunctionAsHostImport(Context.Store, Context.Linker, OverrideCallback);
 	}
 
@@ -39,13 +40,14 @@ namespace UEWas
 		const TWasmFunc& FuncCallback = MakeWasmFunc(Store, FunctionSignature, Callback);
 		FunctionSignature.Reset();
 
-
 		wasmtime_error_t* Error = wasmtime_linker_define(Linker.Get(), &ModuleName.Get()->Value, &Name.Get()->Value,
 		                                                 WasmFunctionAsExtern(FuncCallback));
+		
 		return HandleError(TEXT("Linking"), Error, nullptr);
 	}
 
-	bool TWasmFunctionSignature::Call(const TWasmModule& Module, const TWasmLinker& Linker, TArray<wasm_val_t> Args,
+	
+	bool TWasmFunctionSignature::Call(const uint32& FuncExternIndex, const TWasmInstance& Instance, TArray<wasm_val_t> Args,
 	                                  TArray<wasm_val_t>& Results)
 	{
 		if (Args.Num() != ArgumentsSignatureArray.Num())
@@ -54,26 +56,24 @@ namespace UEWas
 			       Args.Num(), ArgumentsSignatureArray.Num());
 			return false;
 		}
-
-		auto FuncInstance = MakeWasmInstance(Module, Linker);
-		if (!FuncInstance.IsValid())
-		{
-			UE_LOG(LogUEWasmTime, Warning, TEXT("Error instantiating module!"));
-			return false;
-		}
 		
-		const TWasmExternVec Exports = WasmGetInstanceExports(FuncInstance);
-
-		if (Exports.Get()->Value.size == 0)
+		const TWasmExternVec& Exports = WasmGetInstanceExports(Instance);
+		if (!Exports.IsValid())
 		{
 			UE_LOG(LogUEWasmTime, Warning, TEXT("Error accessing export function!"));
 			return false;
 		}
 
-		const TWasmFunc& RunFunc = WasmToFunction(Exports.Get()->Value.data[0]);
-		if (!RunFunc.IsValid())
+		if(Exports.Get()->Value.size < FuncExternIndex)
 		{
-			UE_LOG(LogUEWasmTime, Warning, TEXT("Error accessing function!"));
+			UE_LOG(LogUEWasmTime, Warning, TEXT("Tried calling non-existent function!"));
+			return false;
+		}
+
+		wasm_func_t* Func = wasm_extern_as_func(Exports.Get()->Value.data[FuncExternIndex]);
+		if (!Func)
+		{
+			UE_LOG(LogUEWasmTime, Warning, TEXT("Error casting export to function!"));
 			return false;
 		}
 
@@ -85,11 +85,17 @@ namespace UEWas
 
 		wasm_val_vec_t ResultsVec = wasm_val_vec_t{(uint32)Results.Num(), Results.GetData()};
 		wasm_val_vec_t ArgsVec = wasm_val_vec_t{(uint32)Args.Num(), Args.GetData()};
-		if (!HandleError(TEXT("Function call"), nullptr, wasm_func_call(RunFunc.Get(), &ArgsVec, &ResultsVec)))
+		if (!HandleError(TEXT("Function call"), nullptr, wasm_func_call(Func, &ArgsVec, &ResultsVec)))
 		{
 			UE_LOG(LogUEWasmTime, Warning, TEXT("Error calling function!"));
 			return false;
 		}
+		return true;
+	}
+
+	bool TWasmFunctionSignature::Exists(const TWasmModule& Module, const TWasmLinker& Linker) const
+	{
+	
 		return true;
 	}
 }

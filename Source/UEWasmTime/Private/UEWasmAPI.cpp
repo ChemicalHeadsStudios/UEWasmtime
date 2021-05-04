@@ -8,22 +8,9 @@ namespace UEWas
 		return false;// HandleError(TEXT("Link Extern"), wasmtime_linker_define(Linker.Get(), &MakeWasmName(ExternModule).Get()->Value,&MakeWasmName(ExternName).Get()->Value, Extern));
 	}
 
-	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmExecutionContext& Context,
-		const TWasmExtern& Extern)
+	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmExecutionContext& Context, wasmtime_func_callback_with_env_t OverrideCallback)
 	{
-		return LinkExtern(ExternModule, ExternName, Context.Linker, Extern);
-	}
-
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmExecutionContext& Context, wasmtime_func_callback_t OverrideCallback)
-	{
-		UE_LOG(LogUEWasmTime, Warning, TEXT("Linked Host function %s::%s"), *WasmNameToString(Name), *WasmNameToString(ModuleName));
-		return LinkFunctionAsHostImport(Context.Store, Context.Linker, OverrideCallback);
-	}
-
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(const TWasmStore& Store,
-	                                                      const TWasmLinker& Linker, wasmtime_func_callback_t OverrideCallback)
-	{
-		wasmtime_func_callback_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
+		wasmtime_func_callback_with_env_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
 #if !UE_BUILD_SHIPPING
 		// @todo Don't assert here because we want to add new callbacks while live coding. Don't rely on this functionality in shipping.
 		if (!Callback)
@@ -37,10 +24,10 @@ namespace UEWas
 		auto ResultSignature = MakeWasmValTypeVecConst(ResultSignatureArray);
 
 		TWasmFuncType FunctionSignature = MakeWasmFuncType(MoveTemp(ArgumentsSignature), MoveTemp(ResultSignature));
-		const TWasmFunc& FuncCallback = MakeWasmFunc(Store, FunctionSignature, Callback);
+		const TWasmFunc& FuncCallback = MakeWasmFunc(Context.Store, FunctionSignature, Callback, Context);
 		FunctionSignature.Reset();
 
-		wasmtime_error_t* Error = wasmtime_linker_define(Linker.Get(), &ModuleName.Get()->Value, &Name.Get()->Value,
+		wasmtime_error_t* Error = wasmtime_linker_define(Context.Linker.Get(), &ModuleName.Get()->Value, &Name.Get()->Value,
 		                                                 WasmFunctionAsExtern(FuncCallback));
 		
 		return HandleError(TEXT("Linking"), Error, nullptr);
@@ -82,7 +69,7 @@ namespace UEWas
 		{
 			Results.Emplace(TWasmValue<wasm_ref_t*>::NewValue(nullptr));
 		}
-
+		
 		wasm_val_vec_t ResultsVec = wasm_val_vec_t{(uint32)Results.Num(), Results.GetData()};
 		wasm_val_vec_t ArgsVec = wasm_val_vec_t{(uint32)Args.Num(), Args.GetData()};
 		if (!HandleError(TEXT("Function call"), nullptr, wasm_func_call(Func, &ArgsVec, &ResultsVec)))

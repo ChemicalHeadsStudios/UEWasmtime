@@ -87,7 +87,7 @@ typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
 	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* const* Data, uint32 Num), DeleterFunction)
 
 
-FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr)
+FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr, bool bPrintError = true)
 {
 	wasm_byte_vec_t ErrorMessage = {0, nullptr};
 	if (ErrorPointer != nullptr)
@@ -104,7 +104,10 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 	if (ErrorMessage.data != nullptr)
 	{
 		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
-		UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		if (bPrintError)
+		{
+			UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+		}
 		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
 		return false;
@@ -532,7 +535,7 @@ namespace UEWas
 		                              wasmtime_func_callback_with_env_t OverrideCallback = nullptr);
 
 		bool Call(const uint32& FuncExternIndex, const TWasmInstance& Instance, TArray<wasm_val_t> Args,
-		          TArray<wasm_val_t>& Results);
+		          TArray<wasm_val_t>& Results, bool bPrintError = true);
 
 		bool Exists(const TWasmModule& Module, const TWasmLinker& Linker) const;
 

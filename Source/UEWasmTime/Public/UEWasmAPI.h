@@ -1,7 +1,6 @@
 ﻿#pragma once
 #include <memory>
 #include <string>
-
 #include "UEWasmTime.h"
 THIRD_PARTY_INCLUDES_START
 #include "wasmtime.h"
@@ -87,7 +86,8 @@ typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
 	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* const* Data, uint32 Num), DeleterFunction)
 
 
-FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr, bool bPrintError = true)
+FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr,
+                             bool bPrintError = true)
 {
 	wasm_byte_vec_t ErrorMessage = {0, nullptr};
 	if (ErrorPointer != nullptr)
@@ -189,10 +189,13 @@ namespace UEWas
 
 	FORCEINLINE TWasmExternVec WasmGetInstanceExports(const TWasmInstance& Instance)
 	{
-		check(Instance.Get());
-		auto ExternVec = new TWasmRef<wasm_extern_vec_t>();
-		wasm_instance_exports(Instance.Get(), &ExternVec->Value);
-		return TWasmExternVec(ExternVec);
+		if (Instance.Get())
+		{
+			auto ExternVec = new TWasmRef<wasm_extern_vec_t>();
+			wasm_instance_exports(Instance.Get(), &ExternVec->Value);
+			return TWasmExternVec(ExternVec);
+		}
+		return {};
 	}
 
 	FORCEINLINE TWasmExternConst WasmGlobalAsExternConst(const TWasmGlobalVal& Val)
@@ -331,18 +334,16 @@ namespace UEWas
 		wasm_trap_t* Trap;
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
 
-		if(RawInstance)
+		if (RawInstance && !Error)
 		{
-			// if(Trap && Trap)
+			// if(Trap)
 			// {
 			// 	wasm_trap_delete(Trap);
-			// }
-
-			// if(Error)
+			// } else if(Error)
 			// {
 			// 	wasmtime_error_delete(Error);
 			// }
-			//
+
 			return TWasmInstance(RawInstance);
 		}
 		return {};
@@ -472,6 +473,10 @@ namespace UEWas
 		}
 	};
 
+	UEWASMTIME_API typedef TMap<FName, uint32> TWasmItemMap;
+	UEWASMTIME_API typedef TSharedPtr<TWasmItemMap> TWasmItemMapPtr;
+
+
 	template <typename T>
 	FORCEINLINE TWasmGlobalVal MakeWasmGlobalVal(const TWasmStore& Store, const T& Value,
 	                                             const wasm_mutability_enum& Mutability = wasm_mutability_enum::WASM_CONST)
@@ -487,7 +492,7 @@ namespace UEWas
 		// wasm_globaltype_delete(GlobalType);
 		return Out;
 	}
-	
+
 	class UEWASMTIME_API TWasmFunctionSignature
 	{
 	protected:
@@ -518,7 +523,8 @@ namespace UEWas
 		};
 
 		TWasmFunctionSignature(const FString& InModuleName, const FString& InFunctionName, const TArray<TWasmValType>& InArgsSignature = {},
-		                       const TArray<TWasmValType>& InResultSignature = {}, wasmtime_func_callback_with_env_t InImportCallback = nullptr)
+		                       const TArray<TWasmValType>& InResultSignature = {},
+		                       wasmtime_func_callback_with_env_t InImportCallback = nullptr)
 		{
 			ModuleName = MakeWasmName(InModuleName);
 			Name = MakeWasmName(InFunctionName);
@@ -529,33 +535,40 @@ namespace UEWas
 
 
 		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmLinker& Linker, const TWasmExtern& Extern);
-		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmExecutionContext& Context, const TWasmExtern& Extern);
+		bool LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmExecutionContext& Context,
+		                const TWasmExtern& Extern);
 
-		bool LinkFunctionAsHostImport(const TWasmExecutionContext& Context,
+		bool LinkFunctionAsHostImport(TWasmExecutionContext* Context,
 		                              wasmtime_func_callback_with_env_t OverrideCallback = nullptr);
 
 		bool Call(const uint32& FuncExternIndex, const TWasmInstance& Instance, TArray<wasm_val_t> Args,
 		          TArray<wasm_val_t>& Results, bool bPrintError = true);
 
-		bool Exists(const TWasmModule& Module, const TWasmLinker& Linker) const;
+		bool ExistsAsExtern(const TWasmItemMapPtr& InExternMapping) const;
 
 
 		FORCEINLINE FString GetName() const
 		{
 			return WasmNameToString(Name);
 		}
+
+		FORCEINLINE FString GetModuleName() const
+		{
+			return WasmNameToString(ModuleName);
+		}
+
+		FString GetFunctionSignature() const
+		{
+			return FString::Printf(TEXT("%s::%s"), *GetModuleName(), *GetName());
+		}
 	};
-	
+
 	UEWASMTIME_API typedef TSharedPtr<TWasmFunctionSignature> TWasmFunctionSignaturePtr;
 	UEWASMTIME_API typedef TSharedRef<TWasmFunctionSignature> TWasmFunctionSignatureRef;
 
-	UEWASMTIME_API typedef TMap<FName, uint32> TWasmExternMap;
-	UEWASMTIME_API typedef TSharedPtr<TWasmExternMap> TWasmExternMapPtr;
-
-
-	FORCEINLINE TWasmExternMapPtr GenerateWasmExternMap(const TWasmModule& Module)
+	FORCEINLINE TWasmItemMapPtr GenerateWasmExternMap(const TWasmModule& Module)
 	{
-		TWasmExternMapPtr ExternMap = TWasmExternMapPtr(new TWasmExternMap());
+		TWasmItemMapPtr ExternMap = TWasmItemMapPtr(new TWasmItemMap());
 		wasm_exporttype_vec_t ExportTypes;
 		wasm_module_exports(Module.Get(), &ExportTypes);
 
@@ -564,14 +577,30 @@ namespace UEWas
 			auto Name = wasm_exporttype_name(ExportTypes.data[Index]);
 			const FString& ExportName = FString(Name->size, UTF8_TO_TCHAR(Name->data));
 			ExternMap->Emplace(*ExportName, Index);
-			UE_LOG(LogUEWasmTime, Warning, TEXT("Exportmap %s"), *ExportName);
 		}
 
 		wasm_exporttype_vec_delete(&ExportTypes);
 		return ExternMap;
 	}
 
-	
+	FORCEINLINE TWasmItemMapPtr GenerateWasmImportMap(const TWasmModule& Module)
+	{
+		TWasmItemMapPtr ImportMap = TWasmItemMapPtr(new TWasmItemMap());
+		wasm_importtype_vec_t ExportTypes;
+		wasm_module_imports(Module.Get(), &ExportTypes);
+
+		for (uint32 Index = 0; Index < ExportTypes.size; Index++)
+		{
+			auto Name = wasm_importtype_name(ExportTypes.data[Index]);
+			const FString& ImportName = FString(Name->size, UTF8_TO_TCHAR(Name->data));
+			ImportMap->Emplace(*ImportName, Index);
+		}
+
+		wasm_importtype_vec_delete(&ExportTypes);
+		return ImportMap;
+	}
+
+
 	class UEWASMTIME_API TWasmExecutionContext
 	{
 	public:
@@ -579,18 +608,21 @@ namespace UEWas
 		TWasiInstance LinkerInstance;
 		TWasmLinker Linker;
 		TWasmInstance Instance;
-		TWasmExternMapPtr ExternMapping;
+		TWasmItemMapPtr ExternMapping;
+		TWasmItemMapPtr HostFunctionMapping;
 		void* AdditionalEnvironment;
-		
+
 	protected:
 		bool bValid;
 
 	public:
 		TWasmExecutionContext(const TWasmModule& Module, const TWasmEngine& InEngine,
-		                      const TArray<TWasmFunctionSignaturePtr>& ImportFunctions, const TWasmExternMapPtr& InExternMapping,
+		                      const TArray<TWasmFunctionSignaturePtr>& HostFunctions, const TWasmItemMapPtr& InHostFunctionMapping,
+		                      const TWasmItemMapPtr& InExternMapping,
 		                      const FString& WorkspacePath)
 		{
 			ExternMapping = InExternMapping;
+			HostFunctionMapping = InHostFunctionMapping;
 			TWasiConfig TempConfig = MakeWasiConfig();
 			Store = MakeWasmStore(InEngine);
 			if (Store.IsValid())
@@ -605,14 +637,27 @@ namespace UEWas
 							Linker = MakeWasmLinker(LinkerInstance, Store);
 							if (Linker.IsValid())
 							{
-								for (const TWasmFunctionSignaturePtr& Import : ImportFunctions)
+								for (const TWasmFunctionSignaturePtr& Import : HostFunctions)
 								{
 									check(Import.Get());
-									Import->LinkFunctionAsHostImport(*this);
+									if (HostFunctionMapping->Find(*Import->GetName()))
+									{
+										if (!Import->LinkFunctionAsHostImport(this))
+										{
+											UE_LOG(LogUEWasmTime, Error,
+											       TEXT("Wasm Instance broken. Failed to link host function (%s) with module."),
+											       *Import->GetFunctionSignature());
+										}
+									}
+									else
+									{
+										UE_LOG(LogUEWasmTime, Error, TEXT("Failed to link host function (%s) with module. Exporting a function decleration is required."),
+										       *Import->GetFunctionSignature());
+									}
 								}
-								
+
 								Instance = MakeWasmInstance(Module, Linker);
-								if(Instance.IsValid())
+								if (Instance.IsValid())
 								{
 									bValid = true;
 								}
@@ -629,16 +674,16 @@ namespace UEWas
 		}
 	};
 
-	typedef TSharedPtr<TWasmExecutionContext> TWasmExecutionContextPtr; 
+	typedef TUniquePtr<TWasmExecutionContext> TWasmExecutionContextPtr;
 
-	
+
 	FORCEINLINE TWasmFunc MakeWasmFunc(const TWasmStore& WasmStore, const TWasmFuncType& WasmFunctype,
-									wasmtime_func_callback_with_env_t FunctionCallback, const TWasmExecutionContext& Ptr)
+	                                   wasmtime_func_callback_with_env_t FunctionCallback, TWasmExecutionContext* Ptr)
 	{
 		check(FunctionCallback);
 		check(WasmFunctype.Get())
 		check(WasmStore.Get());
-		return TWasmFunc(wasmtime_func_new_with_env(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback, (void*)&Ptr, nullptr));
+		return TWasmFunc(wasmtime_func_new_with_env(WasmStore.Get(), WasmFunctype.Get(), FunctionCallback, Ptr, nullptr));
 	}
 
 	FORCEINLINE byte_t* GetWasmExecutionMemory(const TWasmExecutionContext& Context, uint64_t& MemorySize, uint64_t& MemoryDataSize)
@@ -670,7 +715,7 @@ namespace UEWas
 		return nullptr;
 	}
 
-	
+
 	// template <>
 	// struct TWasmValue<FString>
 	// {
@@ -774,7 +819,7 @@ namespace UEWas
 							break;
 						}
 					}
-					
+
 					if (Copied.Num() > 0)
 					{
 						return FString(Copied.Num() - 1, Copied.GetData());

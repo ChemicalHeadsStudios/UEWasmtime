@@ -334,15 +334,11 @@ namespace UEWas
 		wasm_trap_t* Trap;
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
 
+		HandleError(TEXT("MakeWasmInstance"), Error);
+		
 		if (RawInstance && !Error)
 		{
-			// if(Trap)
-			// {
-			// 	wasm_trap_delete(Trap);
-			// } else if(Error)
-			// {
-			// 	wasmtime_error_delete(Error);
-			// }
+
 
 			return TWasmInstance(RawInstance);
 		}
@@ -645,13 +641,13 @@ namespace UEWas
 										if (!Import->LinkFunctionAsHostImport(this))
 										{
 											UE_LOG(LogUEWasmTime, Error,
-											       TEXT("Wasm Instance broken. Failed to link host function (%s) with module."),
+											       TEXT("Instance Linking failed. Failed to link host function (%s) with module."),
 											       *Import->GetFunctionSignature());
 										}
 									}
 									else
 									{
-										UE_LOG(LogUEWasmTime, Error, TEXT("Failed to link host function (%s) with module. Exporting a function decleration is required."),
+										UE_LOG(LogUEWasmTime, Warning, TEXT("Failed to find host function (%s) under module."),
 										       *Import->GetFunctionSignature());
 									}
 								}

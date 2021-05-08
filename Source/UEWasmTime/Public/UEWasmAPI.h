@@ -384,9 +384,9 @@ namespace UEWas
 	};
 
 	template <>
-	struct TWasmValue<int32_t>
+	struct TWasmValue<int32>
 	{
-		static wasm_val_t NewValue(int32_t InValue)
+		static wasm_val_t NewValue(int32 InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_I32;
@@ -402,9 +402,9 @@ namespace UEWas
 
 
 	template <>
-	struct TWasmValue<int64_t>
+	struct TWasmValue<int64>
 	{
-		static wasm_val_t NewValue(int64_t InValue)
+		static wasm_val_t NewValue(int64 InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_I64;
@@ -419,9 +419,26 @@ namespace UEWas
 	};
 
 	template <>
-	struct TWasmValue<float32_t>
+	struct TWasmValue<uint64>
 	{
-		static wasm_val_t NewValue(float32_t InValue)
+		static wasm_val_t NewValue(uint64 InValue)
+		{
+			wasm_val_t WasmValue;
+			WasmValue.kind = WASM_I64;
+			WasmValue.of.i64 = InValue;
+			return WasmValue;
+		}
+
+		static TWasmValType GetType()
+		{
+			return MakeWasmValTypeInt64();
+		}
+	};
+
+	template <>
+	struct TWasmValue<float>
+	{
+		static wasm_val_t NewValue(float InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_F32;
@@ -436,9 +453,9 @@ namespace UEWas
 	};
 
 	template <>
-	struct TWasmValue<float64_t>
+	struct TWasmValue<double>
 	{
-		static wasm_val_t NewValue(float64_t InValue)
+		static wasm_val_t NewValue(double InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_F64;
@@ -647,8 +664,10 @@ namespace UEWas
 									}
 									else
 									{
+#if !UE_BUILD_SHIPPING
 										UE_LOG(LogUEWasmTime, Warning, TEXT("Failed to find host function (%s) under module."),
 										       *Import->GetFunctionSignature());
+#endif
 									}
 								}
 

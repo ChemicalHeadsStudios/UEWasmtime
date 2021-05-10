@@ -85,8 +85,7 @@ typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
 #define DECLARE_CUSTOM_WASMTYPE_VEC_CONST(Name, WasmType, WasmVecType, AllocateFunction, DeleterFunction)\
 	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* const* Data, uint32 Num), DeleterFunction)
 
-
-FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr,
+FORCEINLINE bool HandleErrorWithOut(FString& Out, const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr,
                              bool bPrintError = true)
 {
 	wasm_byte_vec_t ErrorMessage = {0, nullptr};
@@ -103,10 +102,10 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 
 	if (ErrorMessage.data != nullptr)
 	{
-		const FString& ErrorString = FString(ErrorMessage.size, ErrorMessage.data);
+		Out = FString(ErrorMessage.size, ErrorMessage.data);
 		if (bPrintError)
 		{
-			UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
+			UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *Out);
 		}
 		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
@@ -114,6 +113,14 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
 	}
 	return true;
 }
+
+FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPointer, wasm_trap_t* TrapPointer = nullptr,
+							bool bPrintError = true)
+{
+	FString ErrorString;
+	return HandleErrorWithOut(ErrorString, Caller, ErrorPointer, TrapPointer, bPrintError);
+}
+
 
 /**
  * UEWasm smart pointer and utility library.
@@ -325,7 +332,7 @@ namespace UEWas
 		return TWasiInstance(WasiInstance);
 	}
 
-	FORCEINLINE TWasmInstance MakeWasmInstance(const TWasmModule& Module, const TWasmLinker& Linker)
+	FORCEINLINE TWasmInstance MakeWasmInstance(const TWasmModule& Module, const TWasmLinker& Linker, FString& OutErrorString)
 	{
 		check(Module.Get());
 		check(Linker.Get());
@@ -334,12 +341,10 @@ namespace UEWas
 		wasm_trap_t* Trap;
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
 
-		HandleError(TEXT("MakeWasmInstance"), Error);
+		HandleErrorWithOut(OutErrorString, TEXT("MakeWasmInstance"), Error);
 		
 		if (RawInstance && !Error)
 		{
-
-
 			return TWasmInstance(RawInstance);
 		}
 		return {};
@@ -400,7 +405,21 @@ namespace UEWas
 		}
 	};
 
+	template <>
+	struct TWasmValue<bool> : TWasmValue<int32>
+	{		
+	};
 
+	/**
+	 * Pointer.
+	 */
+	template <>
+	struct TWasmValue<FString> : TWasmValue<int32>
+	{		
+	};
+
+
+	
 	template <>
 	struct TWasmValue<int64>
 	{
@@ -419,20 +438,8 @@ namespace UEWas
 	};
 
 	template <>
-	struct TWasmValue<uint64>
+	struct TWasmValue<uint64> : TWasmValue<int64>
 	{
-		static wasm_val_t NewValue(uint64 InValue)
-		{
-			wasm_val_t WasmValue;
-			WasmValue.kind = WASM_I64;
-			WasmValue.of.i64 = InValue;
-			return WasmValue;
-		}
-
-		static TWasmValType GetType()
-		{
-			return MakeWasmValTypeInt64();
-		}
 	};
 
 	template <>
@@ -624,6 +631,7 @@ namespace UEWas
 		TWasmItemMapPtr ExternMapping;
 		TWasmItemMapPtr HostFunctionMapping;
 		void* AdditionalEnvironment;
+		FString Error;
 
 	protected:
 		bool bValid;
@@ -640,6 +648,7 @@ namespace UEWas
 			Store = MakeWasmStore(InEngine);
 			if (Store.IsValid())
 			{
+				// Lock directory.
 				if (wasi_config_preopen_dir(TempConfig.Get(), TCHAR_TO_UTF8(*WorkspacePath), TCHAR_TO_UTF8(TEXT(""))))
 				{
 					if (TempConfig.IsValid())
@@ -671,10 +680,15 @@ namespace UEWas
 									}
 								}
 
-								Instance = MakeWasmInstance(Module, Linker);
-								if (Instance.IsValid())
+								Instance = MakeWasmInstance(Module, Linker, Error);
+								if (Instance.IsValid() && Error.IsEmpty())
 								{
 									bValid = true;
+								}
+
+								if(!Error.IsEmpty())
+								{
+									bValid = false;
 								}
 							}
 						}

@@ -423,7 +423,7 @@ namespace UEWas
 	template <>
 	struct TWasmValue<int64>
 	{
-		static wasm_val_t NewValue(int64 InValue)
+		static wasm_val_t New(int64 InValue)
 		{
 			wasm_val_t WasmValue;
 			WasmValue.kind = WASM_I64;
@@ -503,7 +503,7 @@ namespace UEWas
 	{
 		TWasmGlobalVal Out = {};
 		// wasm_global_t* Global;
-		// auto WrappedValue = TWasmValue<T>::NewValue(Value);
+		// auto WrappedValue = TWasmValue<T>::New(Value);
 		// if (HandleError(TEXT("New Global"), wasmtime_global_new(Store.Get(), GlobalType, &WrappedValue, &Global)))
 		// {
 		// 	Out = TWasmGlobalVal(Global);
@@ -748,7 +748,7 @@ namespace UEWas
 	// template <>
 	// struct TWasmValue<FString>
 	// {
-	// 	static wasm_val_t NewValue(const FString& InValue, const TWasmModule& WasmModule, const TWasmLinker& Linker,
+	// 	static wasm_val_t New(const FString& InValue, const TWasmModule& WasmModule, const TWasmLinker& Linker,
 	// 	                           const TWasmFunctionSignaturePtrWithIndex& AllocFunction,
 	// 	                           const TWasmFunctionSignaturePtrWithIndex& PinFunction = {})
 	// 	{
@@ -761,7 +761,7 @@ namespace UEWas
 	// 		const int32 SizeInBytes = Utf8String.length() + 1;
 	// 		TArray<wasm_val_t> Results;
 	// 		if (AllocFunction.Function && AllocFunction.Call(WasmModule, Linker,
-	// 		                                                 {TWasmValue<int32>::NewValue(SizeInBytes), TWasmValue<int32>::NewValue(0)},
+	// 		                                                 {TWasmValue<int32>::New(SizeInBytes), TWasmValue<int32>::New(0)},
 	// 		                                                 Results))
 	// 		{
 	// 			UE_LOG(LogUEWasmTime, Warning, TEXT("Alloc %i"), Results[0].of.i32);
@@ -833,7 +833,7 @@ namespace UEWas
 				const uint64_t NumBytesMemory = wasm_memory_data_size(Memory);
 				const uint64_t Address = PointerOffset;
 				const uint64_t StringLength = NumChars;
-				if (NumBytesMemory > 0 && NumBytesMemory > (Address + StringLength))
+				if (NumBytesMemory > 0 && NumBytesMemory > (Address + StringLength) && NumBytesMemory > Address)
 				{
 					TArray<byte_t> Copied;
 					Copied.Reserve(StringLength);

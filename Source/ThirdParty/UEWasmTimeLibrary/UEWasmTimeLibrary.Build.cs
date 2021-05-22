@@ -27,7 +27,7 @@ public class UEWasmTimeLibrary : ModuleRules
 		} else if(Target.Platform.IsInGroup(UnrealPlatformGroup.Linux) && Target.Architecture.StartsWith("x86_64")) {
 			PublicDelayLoadDLLs.Add("libwasmtime.so");
 			RuntimeDependencies.Add(Path.Combine(BaseBinaryPath, string.Format("wasmtime-{0}-x86_64-linux-c-api", VERSION), "lib", "libwasmtime.so"));
-			// PublicAdditionalLibraries.Add(Path.Combine(BaseLibraryPath, "lib", string.Format("wasmtime.lib")));
+			PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, string.Format("wasmtime-{0}-x86_64-linux-c-api", VERSION), "lib", "libwasmtime.a"));
 		}
 	}
 }

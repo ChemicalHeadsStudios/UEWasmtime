@@ -18,7 +18,7 @@ void FUEWasmTimeModule::StartupModule()
 
 #if PLATFORM_LINUX
 	Handle = TEXT("libwasmtime.so");
-	FString Platform = FString::Printf(TEXT("wasmtime-%s-x86_64-linux-c-api"), TEXT(WASMTIME_VERSION));
+	Platform = FString::Printf(TEXT("wasmtime-%s-x86_64-linux-c-api"), TEXT(WASMTIME_VERSION));
 #endif
 
 

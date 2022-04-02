@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright SIA CHEMICAL HEADS 2020
 
 #include "UEWasmTime.h"
 #include "Core.h"

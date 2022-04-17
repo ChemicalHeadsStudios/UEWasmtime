@@ -68,16 +68,21 @@ struct T##Name##CustomDeleter : TDefaultDelete<TWasmRef<WasmType>>\
 			Ptr = nullptr;\
 		}\
 	}\
+};\
+typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name;\
+template<>\
+struct TWasmTypeHelper<T##Name>\
+{\
 	static void\
 	AllocationSignature\
 	{\
 		return AllocateFunction(&Out, Num, Data);\
 	}\
+public:\
 	typedef WasmVecType StaticElementType;\
 	typedef WasmType StaticWasmType;\
 	typedef T##Name##CustomDeleter StaticWasmDeleter;\
-};\
-typedef TUniquePtr<TWasmRef<WasmType>, T##Name##CustomDeleter> T##Name
+}
 
 #define DECLARE_CUSTOM_WASMTYPE_VEC(Name, WasmType, WasmVecType, AllocateFunction, DeleterFunction)\
 	DECLARE_CUSTOM_WASMTYPE_VEC_CUSTOM(Name, WasmType, WasmVecType, AllocateFunction, Allocate(WasmType& Out, WasmVecType* Data, uint32 Num), DeleterFunction)
@@ -127,6 +132,14 @@ FORCEINLINE bool HandleError(const FString& Caller, wasmtime_error_t* ErrorPoint
  */
 namespace UEWas
 {
+	// Partial template specialization
+	template<typename Type>
+	struct TWasmTypeHelper
+	{
+	
+	}; 
+
+	
 	class TWasmExecutionContext;
 	DECLARE_CUSTOM_WASMTYPE(WasiConfig, wasi_config_t, wasi_config_delete);
 	DECLARE_CUSTOM_WASMTYPE(WasiInstance, wasi_instance_t, wasi_instance_delete);
@@ -147,6 +160,7 @@ namespace UEWas
 	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmExternVec, wasm_extern_vec_t, wasm_extern_t, wasm_extern_vec_new, wasm_extern_vec_delete);
 	DECLARE_CUSTOM_WASMTYPE_VEC_CONST(WasmValTypeVec, wasm_valtype_vec_t, wasm_valtype_t, wasm_valtype_vec_new, wasm_valtype_vec_delete);
 	DECLARE_CUSTOM_WASMTYPE_VEC(WasmValVec, wasm_val_vec_t, wasm_val_t, wasm_val_vec_new, wasm_val_vec_delete);
+
 
 	// TSharedPtr checks for type completeness so we use std::shared_ptr instead.
 	typedef std::shared_ptr<wasm_valtype_t> TWasmValType;
@@ -226,43 +240,45 @@ namespace UEWas
 	}
 
 	template <typename VecArrayType = TWasmByteVec>
-	FORCEINLINE VecArrayType MakeWasmVecConst(typename VecArrayType::StaticElementType* const* Data, const uint32& Num,
+	FORCEINLINE VecArrayType MakeWasmVecConst(typename TWasmTypeHelper<VecArrayType>::StaticElementType* const* Data, const uint32& Num,
 	                                          bool bDontDelete = false)
 	{
-		const auto Vec = new TWasmRef<typename VecArrayType::StaticWasmType>();
+		const auto Vec = new TWasmRef<typename TWasmTypeHelper<VecArrayType>::StaticWasmType>();
 		if (Data != nullptr && Num != 0)
 		{
-			VecArrayType::Allocate(Vec->Value, Data, Num);
+			TWasmTypeHelper<VecArrayType>::Allocate(Vec->Value, Data, Num);
 		}
-		return VecArrayType(Vec, typename VecArrayType::StaticWasmDeleter(bDontDelete));
+		return VecArrayType(Vec, typename TWasmTypeHelper<VecArrayType>::StaticWasmDeleter(bDontDelete));
 	}
 
 	template <typename VecArrayType = TWasmByteVec>
-	FORCEINLINE VecArrayType MakeWasmVec(const TArray<typename VecArrayType::StaticElementType*>& Data, bool bDontDelete = false)
+	FORCEINLINE VecArrayType MakeWasmVec(const TArray<typename TWasmTypeHelper<VecArrayType>::StaticElementType*>& Data, bool bDontDelete = false)
 	{
 		return MakeWasmVec<VecArrayType>(Data.GetData(), Data.Num(), bDontDelete);
 	}
 
 	template <typename VecArrayType = TWasmByteVec>
-	FORCEINLINE VecArrayType MakeWasmVec(typename VecArrayType::StaticElementType* Data, const uint32& Num, bool bDontDelete = false)
+	FORCEINLINE VecArrayType MakeWasmVec(typename TWasmTypeHelper<VecArrayType>::StaticElementType* Data, const uint32& Num, bool bDontDelete = false)
 	{
-		const auto Vec = new TWasmRef<typename VecArrayType::StaticWasmType>();
+		const auto Vec = new TWasmRef<typename TWasmTypeHelper<VecArrayType>::StaticWasmType>();
 		if (Data != nullptr && Num != 0)
 		{
-			VecArrayType::Allocate(Vec->Value, Data, Num);
+			TWasmTypeHelper<VecArrayType>::Allocate(Vec->Value, Data, Num);
 		}
-		return VecArrayType(Vec, typename VecArrayType::StaticWasmDeleter(bDontDelete));
+		return VecArrayType(Vec, typename TWasmTypeHelper<VecArrayType>::StaticWasmDeleter(bDontDelete));
 	}
 
 	FORCEINLINE TWasmValTypeVec MakeWasmValTypeVecConst(TWasmValType* Data, const uint32& Num,
-	                                                    bool bDontDelete = false)
+		bool bDontDelete = false)
 	{
 		TArray<wasm_valtype_t*> InnerValTypes;
+		InnerValTypes.Reserve(Num);
 		for (uint32 Index = 0; Index < Num; Index++)
 		{
 			check(Data[Index].get());
 			InnerValTypes.Emplace(Data[Index].get());
 		}
+
 		return MakeWasmVecConst<TWasmValTypeVec>(InnerValTypes.GetData(), InnerValTypes.Num(), bDontDelete);
 	}
 

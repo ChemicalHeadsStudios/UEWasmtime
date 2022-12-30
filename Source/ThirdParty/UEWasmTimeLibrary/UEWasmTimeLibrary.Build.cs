@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright SIA Chemical Heads 2022
 
 using System.IO;
 using UnrealBuildTool;

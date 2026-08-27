@@ -1,4 +1,6 @@
-﻿#include "UEWasmAPI.h"
+﻿// Copyright SIA Chemical Heads 2020-2026
+
+#include "UEWasmAPI.h"
 
 namespace UEWas
 {

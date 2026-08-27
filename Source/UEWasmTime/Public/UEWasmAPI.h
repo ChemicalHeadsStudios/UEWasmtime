@@ -1,4 +1,6 @@
-﻿#pragma once
+﻿// Copyright SIA Chemical Heads 2020-2026
+
+#pragma once
 #include <memory>
 #include <string>
 #include "UEWasmTime.h"

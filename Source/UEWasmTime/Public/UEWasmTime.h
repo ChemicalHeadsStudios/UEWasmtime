@@ -1,3 +1,5 @@
+// Copyright SIA Chemical Heads 2020-2026
+
 #pragma once
 
 UEWASMTIME_API DECLARE_LOG_CATEGORY_EXTERN(LogUEWasmTime, Log, All);

@@ -1,4 +1,4 @@
-// Copyright SIA CHEMICAL HEADS 2020
+// Copyright SIA Chemical Heads 2020-2026
 
 #include "UEWasmTime.h"
 #include "Core.h"

@@ -1,16 +1,16 @@
-﻿// Copyright SIA Chemical Heads 2020-2026
+// Copyright SIA Chemical Heads 2020-2026
 
 #include "UEWasmAPI.h"
 
 namespace UEWas
 {
-	bool TWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const TWasmLinker& Linker,
-	                                        const TWasmExtern& Extern)
+	bool FWasmFunctionSignature::LinkExtern(const FString& ExternModule, const FString& ExternName, const FWasmLinker& Linker,
+	                                        const FWasmExtern& Extern)
 	{
 		return false;// HandleError(TEXT("Link Extern"), wasmtime_linker_define(Linker.Get(), &MakeWasmName(ExternModule).Get()->Value,&MakeWasmName(ExternName).Get()->Value, Extern));
 	}
 
-	bool TWasmFunctionSignature::LinkFunctionAsHostImport(TWasmExecutionContext* Context, wasmtime_func_callback_with_env_t OverrideCallback)
+	bool FWasmFunctionSignature::LinkFunctionAsHostImport(FWasmExecutionContext* Context, wasmtime_func_callback_with_env_t OverrideCallback)
 	{
 		const wasmtime_func_callback_with_env_t Callback = OverrideCallback != nullptr ? OverrideCallback : ImportCallback;
 #if !UE_BUILD_SHIPPING
@@ -25,15 +25,15 @@ namespace UEWas
 		auto ArgumentsSignature = MakeWasmValTypeVecConst(ArgumentsSignatureArray);
 		auto ResultSignature = MakeWasmValTypeVecConst(ResultSignatureArray);
 
-		const TWasmFuncType FunctionSignature = MakeWasmFuncType(MoveTemp(ArgumentsSignature), MoveTemp(ResultSignature));
-		const TWasmFunc& FuncCallback = MakeWasmFunc(Context->Store, FunctionSignature, Callback, Context);
+		const FWasmFuncType FunctionSignature = MakeWasmFuncType(MoveTemp(ArgumentsSignature), MoveTemp(ResultSignature));
+		const FWasmFunc& FuncCallback = MakeWasmFunc(Context->Store, FunctionSignature, Callback, Context);
 		wasmtime_error_t* Error = wasmtime_linker_define(Context->Linker.Get(), &ModuleName.Get()->Value, &Name.Get()->Value,
 		                                                 WasmFunctionAsExtern(FuncCallback));
 		return HandleError(TEXT("Linking"), Error, nullptr);
 	}
 
 	
-	bool TWasmFunctionSignature::Call(const uint32& FuncExternIndex, const TWasmInstance& Instance, TArray<wasm_val_t> Args,
+	bool FWasmFunctionSignature::Call(const uint32& FuncExternIndex, const FWasmInstance& Instance, TArray<wasm_val_t> Args,
 	                                  TArray<wasm_val_t>& Results, bool bPrintError)
 	{
 		if (Args.Num() != ArgumentsSignatureArray.Num())
@@ -43,7 +43,7 @@ namespace UEWas
 			return false;
 		}
 		
-		const TWasmExternVec& Exports = WasmGetInstanceExports(Instance);
+		const FWasmExternVec& Exports = WasmGetInstanceExports(Instance);
 		if (!Exports.IsValid())
 		{
 			UE_LOG(LogUEWasmTime, Warning, TEXT("Error accessing export function!"));
@@ -84,7 +84,7 @@ namespace UEWas
 		return true;
 	}
 
-	bool TWasmFunctionSignature::ExistsAsExtern(const TWasmItemMapPtr& InExternMapping) const
+	bool FWasmFunctionSignature::ExistsAsExtern(const FWasmItemMapPtr& InExternMapping) const
 	{
 		return InExternMapping->Contains(*GetName());
 	}

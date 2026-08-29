@@ -22,8 +22,9 @@ public class UEWasmTimeLibrary : ModuleRules
 			PublicDelayLoadDLLs.Add("wasmtime.dll");
 			RuntimeDependencies.Add(Path.Combine(BaseBinaryPath, string.Format("wasmtime-{0}-x86_64-windows-c-api", VERSION), "lib", "wasmtime.dll"));
 			
+			// Import library only. The DLL is delay loaded and loaded explicitly in
+			// FUEWasmTimeModule::StartupModule; the static wasmtime.lib is not used.
 			PublicAdditionalLibraries.Add(Path.Combine(BaseLibraryPath, "lib", string.Format("wasmtime.dll.lib")));
-			PublicAdditionalLibraries.Add(Path.Combine(BaseLibraryPath, "lib", string.Format("wasmtime.lib")));
 		} else if(Target.Platform.IsInGroup(UnrealPlatformGroup.Linux) && Target.Architecture.StartsWith("x86_64")) {
 			PublicDelayLoadDLLs.Add("libwasmtime.so");
 			RuntimeDependencies.Add(Path.Combine(BaseBinaryPath, string.Format("wasmtime-{0}-x86_64-linux-c-api", VERSION), "lib", "libwasmtime.so"));

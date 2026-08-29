@@ -654,9 +654,15 @@ namespace UEWas
 
 		for (uint32 Index = 0; Index < ExportTypes.size; Index++)
 		{
-			auto Name = wasm_importtype_name(ExportTypes.data[Index]);
-			const FString& ImportName = FString(Name->size, UTF8_TO_TCHAR(Name->data));
-			ImportMap->Emplace(*ImportName, Index);
+			// Keyed on module and name together, matching TWasmFunctionSignature::GetFunctionSignature. An
+			// import is only identified by the pair - "abort" from env and a host function of the same name are
+			// different imports, and keying on the name alone collapses them.
+			const wasm_name_t* ModuleName = wasm_importtype_module(ExportTypes.data[Index]);
+			const wasm_name_t* Name = wasm_importtype_name(ExportTypes.data[Index]);
+			const FString ImportKey = FString::Printf(TEXT("%s::%s"),
+				*FString(ModuleName->size, UTF8_TO_TCHAR(ModuleName->data)),
+				*FString(Name->size, UTF8_TO_TCHAR(Name->data)));
+			ImportMap->Emplace(*ImportKey, Index);
 		}
 
 		wasm_importtype_vec_delete(&ExportTypes);
@@ -717,7 +723,8 @@ namespace UEWas
 								for (const TWasmFunctionSignaturePtr& Import : HostFunctions)
 								{
 									check(Import.Get());
-									if (HostFunctionMapping->Find(*Import->GetName()))
+									// Must match the key GenerateWasmImportMap builds - module and name.
+									if (HostFunctionMapping->Find(*Import->GetFunctionSignature()))
 									{
 										if (!Import->LinkFunctionAsHostImport(this))
 										{
@@ -879,6 +886,14 @@ namespace UEWas
 
 	FORCEINLINE FString WasmMemoryReadString(const wasmtime_caller_t* Caller, const int32& PointerOffset, const int32& NumChars)
 	{
+		// Reject negatives before widening. Both arrive from the guest, and a negative sign-extends to a value
+		// near 2^64, which makes Address + StringLength wrap and pass the bounds check below while asking to read
+		// far outside linear memory.
+		if (PointerOffset < 0 || NumChars <= 0)
+		{
+			return FString();
+		}
+
 		const TWasmExport& Export = WasmGetCallerExport(Caller, TEXT("memory"));
 		if (Export.IsValid())
 		{
@@ -890,29 +905,21 @@ namespace UEWas
 				const uint64_t StringLength = NumChars;
 				if (NumBytesMemory > 0 && NumBytesMemory >= (Address + StringLength) && NumBytesMemory > Address)
 				{
-					const byte_t* Data = wasm_memory_data(Memory);
+					const ANSICHAR* Source = reinterpret_cast<const ANSICHAR*>(wasm_memory_data(Memory) + Address);
 
-					// Guests are expected to pass a null-terminated buffer and a length that includes the
-					// terminator, but do not rely on it: stop at the terminator if there is one, otherwise take
-					// the whole declared length.
-					uint64_t Length = 0;
-					while (Length < StringLength && Data[Address + Length] != '\0')
+					// Guests pass a null-terminated buffer and a length that includes the terminator, but the
+					// length is authoritative: Strnlen stops at a terminator if there is one and yields the whole
+					// declared length if there is not.
+					const int32 ContentLength = FCStringAnsi::Strnlen(Source, static_cast<SIZE_T>(StringLength));
+					if (ContentLength == 0)
 					{
-						Length++;
+						return FString();
 					}
 
-					if (Length == 0)
-					{
-						return TEXT("");
-					}
-
-					// Convert as UTF-8. Building an FString directly from the bytes treats them as ANSI and
-					// mangles every multi-byte sequence.
-					TArray<ANSICHAR> Copied;
-					Copied.Reserve(Length + 1);
-					Copied.Append(reinterpret_cast<const ANSICHAR*>(Data + Address), Length);
-					Copied.Add('\0');
-					return FString(UTF8_TO_TCHAR(Copied.GetData()));
+					// Length-aware UTF-8 conversion. Constructing an FString from the bytes directly treats them
+					// as ANSI and mangles every multi-byte sequence.
+					const FUTF8ToTCHAR Converted(Source, ContentLength);
+					return FString(Converted.Length(), Converted.Get());
 				}
 			}
 		}

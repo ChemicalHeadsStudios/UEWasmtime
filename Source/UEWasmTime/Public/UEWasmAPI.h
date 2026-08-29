@@ -112,7 +112,8 @@ FORCEINLINE bool HandleErrorWithOut(FString& Out, const FString& Caller, wasmtim
 		Out = FString(ErrorMessage.size, ErrorMessage.data);
 		if (bPrintError)
 		{
-			UE_LOG(LogUEWasmTime, Warning, TEXT("WASMError: (%s) %s"), *Caller, *Out);
+			// Only reached when wasmtime reported a failure, so it is an error.
+			UE_LOG(LogUEWasmTime, Error, TEXT("WASMError: (%s) %s"), *Caller, *Out);
 		}
 		// checkf(false, TEXT("WASMError: (%s) %s"), *Caller, *ErrorString);
 		wasm_byte_vec_delete(&ErrorMessage);
@@ -355,13 +356,23 @@ namespace UEWas
 		check(Module.Get());
 		check(Linker.Get());
 
-		wasm_instance_t* RawInstance;
-		wasm_trap_t* Trap;
+		wasm_instance_t* RawInstance = nullptr;
+		// Instantiation runs the module's start function, so it can trap rather than error - an AssemblyScript
+		// module initialises its globals there. Both outcomes have to be reported or the failure is silent.
+		wasm_trap_t* Trap = nullptr;
 		wasmtime_error_t* Error = wasmtime_linker_instantiate(Linker.Get(), Module.Get(), &RawInstance, &Trap);
+		if (!RawInstance && !Error && Trap)
+		{
+			HandleErrorWithOut(OutErrorString, TEXT("MakeWasmInstance (trap)"), nullptr, Trap);
+			return {};
+		}
 
+		// Record whether there was an error BEFORE handling it: HandleErrorWithOut deletes the error object, so
+		// testing `Error` afterwards is reading a freed pointer as a success flag.
+		const bool bHadError = Error != nullptr;
 		HandleErrorWithOut(OutErrorString, TEXT("MakeWasmInstance"), Error);
-		
-		if (RawInstance && !Error)
+
+		if (RawInstance && !bHadError)
 		{
 			return TWasmInstance(RawInstance);
 		}
@@ -459,6 +470,20 @@ namespace UEWas
 	struct TWasmValue<uint64> : TWasmValue<int64>
 	{
 	};
+
+	/**
+	 * Uniform result assignment. Always prefer this over writing wasm_val_t::of directly: the union member alone
+	 * leaves `kind` untagged, and wasmtime rejects a returned value whose tag does not match the declared result
+	 * type. An untagged slot reads as WASM_I32, so a raw union write is silently correct only for i32 results.
+	 */
+	template <typename T>
+	FORCEINLINE void WasmSetResult(wasm_val_vec_t* Results, uint32 Index, T Value)
+	{
+		if (Results && Index < Results->size)
+		{
+			Results->data[Index] = TWasmValue<T>::NewValue(Value);
+		}
+	}
 
 	template <>
 	struct TWasmValue<float>
@@ -655,10 +680,17 @@ namespace UEWas
 		bool bValid;
 
 	public:
+		/**
+		 * InitialFuel must be non-zero when the engine was configured with consume_fuel, because instantiation
+		 * runs the module's start function and a store begins with no fuel at all - it would trap before the
+		 * guest ever reaches its first export. Zero means the engine has fuel accounting disabled.
+		 */
 		TWasmExecutionContext(const TWasmModule& Module, const TWasmEngine& InEngine,
 		                      const TArray<TWasmFunctionSignaturePtr>& HostFunctions, const TWasmItemMapPtr& InHostFunctionMapping,
 		                      const TWasmItemMapPtr& InExternMapping,
-		                      const FString& WorkspacePath)
+		                      const FString& WorkspacePath, uint64 InitialFuel = 0)
+			: AdditionalEnvironment(nullptr)
+			, bValid(false)
 		{
 			ExternMapping = InExternMapping;
 			HostFunctionMapping = InHostFunctionMapping;
@@ -666,6 +698,11 @@ namespace UEWas
 			Store = MakeWasmStore(InEngine);
 			if (Store.IsValid())
 			{
+				if (InitialFuel > 0)
+				{
+					wasmtime_error_t* FuelError = wasmtime_store_add_fuel(Store.Get(), InitialFuel);
+					HandleError(TEXT("TWasmExecutionContext: add initial fuel"), FuelError, nullptr);
+				}
 				// Lock directory.
 				if (wasi_config_preopen_dir(TempConfig.Get(), TCHAR_TO_UTF8(*WorkspacePath), TCHAR_TO_UTF8(TEXT(""))))
 				{
@@ -851,26 +888,31 @@ namespace UEWas
 				const uint64_t NumBytesMemory = wasm_memory_data_size(Memory);
 				const uint64_t Address = PointerOffset;
 				const uint64_t StringLength = NumChars;
-				if (NumBytesMemory > 0 && NumBytesMemory > (Address + StringLength) && NumBytesMemory > Address)
+				if (NumBytesMemory > 0 && NumBytesMemory >= (Address + StringLength) && NumBytesMemory > Address)
 				{
-					TArray<byte_t> Copied;
-					Copied.Reserve(StringLength);
+					const byte_t* Data = wasm_memory_data(Memory);
 
-					byte_t* Data = wasm_memory_data(Memory);
-					for (uint64_t Index = 0; Index < StringLength; Index++)
+					// Guests are expected to pass a null-terminated buffer and a length that includes the
+					// terminator, but do not rely on it: stop at the terminator if there is one, otherwise take
+					// the whole declared length.
+					uint64_t Length = 0;
+					while (Length < StringLength && Data[Address + Length] != '\0')
 					{
-						const TCHAR& Char = Data[Address + Index];
-						Copied.Emplace(Char);
-						if (Char == '\0')
-						{
-							break;
-						}
+						Length++;
 					}
 
-					if (Copied.Num() > 0)
+					if (Length == 0)
 					{
-						return FString(Copied.Num() - 1, Copied.GetData());
+						return TEXT("");
 					}
+
+					// Convert as UTF-8. Building an FString directly from the bytes treats them as ANSI and
+					// mangles every multi-byte sequence.
+					TArray<ANSICHAR> Copied;
+					Copied.Reserve(Length + 1);
+					Copied.Append(reinterpret_cast<const ANSICHAR*>(Data + Address), Length);
+					Copied.Add('\0');
+					return FString(UTF8_TO_TCHAR(Copied.GetData()));
 				}
 			}
 		}
